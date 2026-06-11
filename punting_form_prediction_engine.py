@@ -1,0 +1,792 @@
+from typing import Any, Dict, List, Optional
+
+from punting_form_client import (
+    get_conditions,
+    get_meeting_form,
+    simplify_conditions_response,
+    simplify_form_response,
+)
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
+    return max(minimum, min(value, maximum))
+
+
+def record_score(record: Optional[Dict[str, Any]]) -> float:
+    if not record:
+        return 50.0
+
+    starts = safe_int(record.get("starts"), 0)
+    wins = safe_int(record.get("firsts"), 0)
+    seconds = safe_int(record.get("seconds"), 0)
+    thirds = safe_int(record.get("thirds"), 0)
+
+    if starts <= 0:
+        return 50.0
+
+    win_rate = wins / starts
+    place_rate = (wins + seconds + thirds) / starts
+
+    return clamp((win_rate * 70) + (place_rate * 30))
+
+
+def score_last10(last10: Any) -> float:
+    text = str(last10 or "").strip().lower().replace("x", "")
+
+    if not text:
+        return 50.0
+
+    results = [char for char in text if char.isdigit()]
+    recent = results[-6:]
+
+    if not recent:
+        return 50.0
+
+    score = 50.0
+
+    for index, result in enumerate(recent):
+        recency_multiplier = 1 + (index * 0.06)
+
+        if result == "1":
+            score += 9 * recency_multiplier
+        elif result == "2":
+            score += 7 * recency_multiplier
+        elif result == "3":
+            score += 5 * recency_multiplier
+        elif result in ["4", "5"]:
+            score += 2 * recency_multiplier
+        elif result in ["6", "7"]:
+            score -= 1.5 * recency_multiplier
+        elif result in ["8", "9", "0"]:
+            score -= 3 * recency_multiplier
+
+    return clamp(score)
+
+
+def score_price(price_sp: Any) -> float:
+    price = safe_float(price_sp, 0)
+
+    if price <= 0:
+        return 50.0
+    if price <= 2:
+        return 100.0
+    if price <= 3:
+        return 92.0
+    if price <= 5:
+        return 82.0
+    if price <= 8:
+        return 70.0
+    if price <= 12:
+        return 58.0
+    if price <= 20:
+        return 45.0
+    if price <= 40:
+        return 32.0
+
+    return 20.0
+
+
+def score_barrier(barrier: Any, field_size: int) -> float:
+    barrier_number = safe_int(barrier, 0)
+
+    if barrier_number <= 0:
+        return 50.0
+
+    if field_size <= 8:
+        if 1 <= barrier_number <= 4:
+            return 85.0
+        if barrier_number <= 6:
+            return 70.0
+        return 55.0
+
+    if 2 <= barrier_number <= 6:
+        return 85.0
+    if barrier_number in [1, 7, 8]:
+        return 72.0
+    if 9 <= barrier_number <= 12:
+        return 55.0
+
+    return 38.0
+
+
+def score_weight(weight_kg: Any) -> float:
+    weight = safe_float(weight_kg, 56.0)
+
+    if weight <= 52:
+        return 88.0
+    if weight <= 54:
+        return 80.0
+    if weight <= 56:
+        return 70.0
+    if weight <= 58:
+        return 60.0
+    if weight <= 60:
+        return 48.0
+
+    return 36.0
+
+
+def score_a2e(record: Optional[Dict[str, Any]]) -> float:
+    if not record:
+        return 50.0
+
+    a2e = safe_float(record.get("a2E"), 0)
+    strike_rate = safe_float(record.get("strikeRate"), 0)
+    runners = safe_int(record.get("runners"), 0)
+
+    if runners <= 0:
+        return 50.0
+
+    a2e_score = clamp(a2e * 50, 0, 100)
+    strike_score = clamp(strike_rate * 3, 0, 100)
+    sample_confidence = clamp(runners / 100, 0.25, 1.0)
+
+    return clamp(((a2e_score * 0.6) + (strike_score * 0.4)) * sample_confidence)
+
+
+def score_win_place(win_pct: Any, place_pct: Any) -> float:
+    win = safe_float(win_pct, 0)
+    place = safe_float(place_pct, 0)
+
+    return clamp((win * 0.65) + (place * 0.35))
+
+
+def get_track_condition_record(runner: Dict[str, Any], track_condition: str) -> Dict[str, Any]:
+    condition = str(track_condition or "").upper()
+
+    if condition.startswith("G"):
+        return runner.get("good_record") or {}
+    if condition.startswith("S"):
+        return runner.get("soft_record") or {}
+    if condition.startswith("H"):
+        return runner.get("heavy_record") or {}
+    if condition.startswith("F"):
+        return runner.get("firm_record") or {}
+    if condition.startswith("SYN"):
+        return runner.get("synthetic_record") or {}
+
+    return {}
+
+
+def is_barrier_trial_race(race: Dict[str, Any]) -> bool:
+    race_name = str(race.get("race_name") or "").lower()
+    race_class = str(race.get("race_class") or "").lower()
+
+    return "barrier trial" in race_name or "barrier trial" in race_class
+
+
+def is_valid_runner(runner: Dict[str, Any]) -> bool:
+    name = str(runner.get("horse_name") or "").strip()
+
+    if not name:
+        return False
+
+    if runner.get("emergencyIndicator") is True:
+        return False
+
+    return True
+
+
+def score_runner(
+    runner: Dict[str, Any],
+    race: Dict[str, Any],
+    field_size: int,
+) -> Dict[str, Any]:
+    track_condition = race.get("track_condition") or ""
+
+    last10_score = score_last10(runner.get("last10"))
+    win_place_score = score_win_place(runner.get("win_pct"), runner.get("place_pct"))
+    track_score = record_score(runner.get("track_record"))
+    distance_score = record_score(runner.get("distance_record"))
+    track_distance_score = record_score(runner.get("track_distance_record"))
+    condition_score = record_score(get_track_condition_record(runner, track_condition))
+
+    trainer_score = (
+        score_a2e(runner.get("trainer_a2e_last100")) * 0.65
+        + score_a2e(runner.get("trainer_a2e_career")) * 0.35
+    )
+
+    jockey_score = (
+        score_a2e(runner.get("jockey_a2e_last100")) * 0.65
+        + score_a2e(runner.get("jockey_a2e_career")) * 0.35
+    )
+
+    trainer_jockey_score = (
+        score_a2e(runner.get("trainer_jockey_a2e_last100")) * 0.70
+        + score_a2e(runner.get("trainer_jockey_a2e_career")) * 0.30
+    )
+
+    barrier_score = score_barrier(runner.get("barrier"), field_size)
+    weight_score = score_weight(runner.get("weight_kg"))
+    market_score = score_price(runner.get("price_sp"))
+
+    final_score = (
+        last10_score * 0.17
+        + win_place_score * 0.10
+        + track_score * 0.08
+        + distance_score * 0.10
+        + track_distance_score * 0.08
+        + condition_score * 0.10
+        + trainer_score * 0.09
+        + jockey_score * 0.09
+        + trainer_jockey_score * 0.08
+        + barrier_score * 0.05
+        + weight_score * 0.03
+        + market_score * 0.03
+    )
+
+    final_score = round(clamp(final_score), 1)
+
+    confidence = round(
+        clamp(
+            final_score * 0.78
+            + market_score * 0.10
+            + trainer_jockey_score * 0.07
+            + condition_score * 0.05,
+            10,
+            95,
+        ),
+        1,
+    )
+
+    price = safe_float(runner.get("price_sp"), 0)
+
+    return {
+        **runner,
+        "race_id": race.get("race_id"),
+        "race_name": race.get("race_name"),
+        "race_number": race.get("race_number"),
+	"race_label": f"Race {race.get('race_number')}",
+	"race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
+        "distance_m": race.get("distance_m"),
+        "track_condition": race.get("track_condition"),
+        "score": final_score,
+        "confidence": confidence,
+        "price": price,
+        "market_rank": None,
+        "score_breakdown": {
+            "last10_form": round(last10_score, 1),
+            "win_place": round(win_place_score, 1),
+            "track_record": round(track_score, 1),
+            "distance_record": round(distance_score, 1),
+            "track_distance_record": round(track_distance_score, 1),
+            "track_condition_record": round(condition_score, 1),
+            "trainer": round(trainer_score, 1),
+            "jockey": round(jockey_score, 1),
+            "trainer_jockey": round(trainer_jockey_score, 1),
+            "barrier": round(barrier_score, 1),
+            "weight": round(weight_score, 1),
+            "market_price": round(market_score, 1),
+        },
+    }
+
+
+def assign_market_ranks(scored_runners: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    priced = [
+        runner for runner in scored_runners
+        if safe_float(runner.get("price"), 0) > 0
+    ]
+
+    priced_sorted = sorted(priced, key=lambda item: safe_float(item.get("price"), 9999))
+
+    price_rank = {
+        id(runner): index + 1
+        for index, runner in enumerate(priced_sorted)
+    }
+
+    for runner in scored_runners:
+        runner["market_rank"] = price_rank.get(id(runner), 99)
+
+    return scored_runners
+
+
+def format_reason(runner: Dict[str, Any], category: str = "standard") -> str:
+    breakdown = runner.get("score_breakdown") or {}
+    reasons = []
+
+    if category == "roughie":
+        if safe_int(runner.get("market_rank"), 99) >= 6:
+            reasons.append("outside the main market but still rates competitively")
+        if safe_float(runner.get("price"), 0) >= 10:
+            reasons.append("available at a roughie price")
+
+    if safe_float(breakdown.get("last10_form")) >= 70:
+        reasons.append("strong recent form profile")
+
+    if safe_float(breakdown.get("track_condition_record")) >= 65:
+        reasons.append("suited to the track condition")
+
+    if safe_float(breakdown.get("distance_record")) >= 65:
+        reasons.append("positive distance record")
+
+    if safe_float(breakdown.get("trainer_jockey")) >= 65:
+        reasons.append("strong trainer/jockey profile")
+
+    if safe_float(breakdown.get("barrier")) >= 80:
+        reasons.append("favourable barrier")
+
+    if safe_float(breakdown.get("market_price")) >= 80 and category != "roughie":
+        reasons.append("well supported in the market")
+
+    if not reasons:
+        reasons.append("balanced profile across the RRT scoring model")
+
+    return ", ".join(reasons).capitalize() + "."
+
+
+def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[str, Any]:
+    return {
+        "number": runner.get("tab_number"),
+        "runner": runner.get("horse_name"),
+        "horse_name": runner.get("horse_name"),
+        "trainer": runner.get("trainer"),
+        "jockey": runner.get("jockey"),
+        "barrier": runner.get("barrier"),
+        "weight": runner.get("weight_kg"),
+        "price": runner.get("price"),
+        "market_rank": runner.get("market_rank"),
+        "last10": runner.get("last10"),
+        "score": runner.get("score"),
+        "confidence": runner.get("confidence"),
+
+        "race_id": runner.get("race_id"),
+        "race_name": runner.get("race_name"),
+        "race_number": runner.get("race_number"),
+        "race_label": runner.get("race_label"),
+        "race_title": runner.get("race_title"),
+
+        "distance_m": runner.get("distance_m"),
+        "reason": format_reason(runner, category=category),
+        "score_breakdown": runner.get("score_breakdown"),
+    }
+
+def score_race(race: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if is_barrier_trial_race(race):
+        return []
+
+    runners = [
+        runner for runner in race.get("runners", [])
+        if is_valid_runner(runner)
+    ]
+
+    scored = [
+        score_runner(runner, race, len(runners))
+        for runner in runners
+    ]
+
+    scored = assign_market_ranks(scored)
+
+    return sorted(scored, key=lambda item: item.get("score", 0), reverse=True)
+
+
+def select_roughies(
+    all_ranked: List[Dict[str, Any]],
+    excluded: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    excluded_ids = {
+        f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}"
+        for runner in excluded
+    }
+
+    roughies = []
+
+    for runner in all_ranked:
+        runner_id = f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}"
+
+        if runner_id in excluded_ids:
+            continue
+
+        market_rank = safe_int(runner.get("market_rank"), 99)
+        score = safe_float(runner.get("score"), 0)
+        price = safe_float(runner.get("price"), 0)
+
+        if price > 0 and price >= 10 and market_rank >= 6 and score >= 45:
+            roughies.append(runner)
+
+    return sorted(
+        roughies,
+        key=lambda item: (
+            safe_float(item.get("score"), 0),
+            safe_float(item.get("price"), 0),
+        ),
+        reverse=True,
+    )[:4]
+
+
+def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
+    ranked_races = []
+
+    for race in races:
+        ranked = score_race(race)
+
+        if not ranked:
+            continue
+
+        ranked_races.append(
+    {
+        "race_id": race.get("race_id"),
+        "race_number": race.get("race_number"),
+        "race_label": f"Race {race.get('race_number')}",
+        "race_name": race.get("race_name"),
+        "race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
+        "distance_m": race.get("distance_m"),
+        "selections": [
+            format_runner(runner)
+            for runner in ranked[:3]
+        ],
+    }
+)
+
+    return {
+        "best_double": {
+            "legs": ranked_races[:2],
+            "status": "Active" if len(ranked_races) >= 2 else "Awaiting enough eligible races",
+        },
+        "best_quaddie": {
+            "legs": ranked_races[:4],
+            "status": "Active" if len(ranked_races) >= 4 else "Awaiting enough eligible races",
+        },
+    }
+
+
+
+def normalise_text(value: Any) -> str:
+    return (
+        str(value or "")
+        .upper()
+        .replace(".", "")
+        .replace("'", "")
+        .replace("’", "")
+        .replace("-", " ")
+        .strip()
+    )
+
+
+def normalise_date(value: Any) -> str:
+    text = str(value or "").strip()
+
+    if "T" in text:
+        return text.split("T")[0]
+
+    return text[:10]
+
+
+def get_meeting_track_from_form_data(form_data: Dict[str, Any]) -> str:
+    races = form_data.get("races") or []
+
+    for race in races:
+        historical_forms = []
+
+        for runner in race.get("runners") or []:
+            historical_forms.extend(runner.get("historical_forms") or [])
+
+        for form in historical_forms:
+            track = form.get("track") or form.get("trackName")
+
+            if track:
+                return str(track)
+
+    return ""
+
+
+def get_meeting_date_from_form_data(form_data: Dict[str, Any]) -> str:
+    races = form_data.get("races") or []
+
+    for race in races:
+        historical_forms = []
+
+        for runner in race.get("runners") or []:
+            historical_forms.extend(runner.get("historical_forms") or [])
+
+        for form in historical_forms:
+            date_value = (
+                form.get("meetingDate")
+                or form.get("raceDate")
+                or form.get("date")
+            )
+
+            if date_value:
+                return normalise_date(date_value)
+
+    return ""
+
+
+def fetch_condition_for_meeting(
+    meeting_id: Optional[int],
+    form_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        raw_conditions = get_conditions()
+        simplified = simplify_conditions_response(raw_conditions)
+        conditions = simplified.get("conditions") or []
+
+        meeting_id_int = safe_int(meeting_id, 0)
+
+        if meeting_id_int > 0:
+            for condition in conditions:
+                if safe_int(condition.get("meeting_id"), 0) == meeting_id_int:
+                    return {
+                        **condition,
+                        "matched_by": "meeting_id",
+                        "conditions_success": simplified.get("success"),
+                    }
+
+        form_track = get_meeting_track_from_form_data(form_data or {})
+        form_date = get_meeting_date_from_form_data(form_data or {})
+
+        normalised_form_track = normalise_text(form_track)
+        normalised_form_date = normalise_date(form_date)
+
+        if normalised_form_track and normalised_form_date:
+            for condition in conditions:
+                if (
+                    normalise_text(condition.get("track")) == normalised_form_track
+                    and normalise_date(condition.get("meeting_date")) == normalised_form_date
+                ):
+                    return {
+                        **condition,
+                        "matched_by": "track_and_date",
+                        "conditions_success": simplified.get("success"),
+                    }
+
+        return {
+            "track_condition_display": "Not currently supplied.",
+            "weather": "Not currently supplied.",
+            "matched_by": "not_matched",
+            "conditions_success": simplified.get("success"),
+        }
+
+    except Exception as error:
+        return {
+            "track_condition_display": "Not currently supplied.",
+            "weather": "Not currently supplied.",
+            "matched_by": "conditions_error",
+            "conditions_success": False,
+            "error": str(error),
+        }
+
+
+def condition_track_bias(track_condition: str) -> str:
+    condition = str(track_condition or "").upper()
+
+    if "HEAVY" in condition or "HVY" in condition:
+        return "Wet Track Influence - Heavy"
+    if "SOFT" in condition:
+        return "Wet Track Influence - Soft"
+    if "GOOD" in condition:
+        return "Good Track / Neutral"
+    if "SYNTHETIC" in condition:
+        return "Synthetic Surface"
+
+    return "Neutral"
+
+
+
+def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] = None, condition_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    races = form_data.get("races") or []
+
+    eligible_races = [
+        race for race in races
+        if not is_barrier_trial_race(race)
+    ]
+
+    all_ranked = []
+
+    for race in eligible_races:
+        all_ranked.extend(score_race(race))
+
+    all_ranked = sorted(
+        all_ranked,
+        key=lambda item: item.get("score", 0),
+        reverse=True,
+    )
+
+    if not all_ranked:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "message": "No eligible non-barrier-trial races available for prediction.",
+            "meeting_id": meeting_id,
+            "eligible_race_count": 0,
+        }
+
+    top_4_win = all_ranked[:4]
+    top_4_each_way = all_ranked[4:8] if len(all_ranked) >= 8 else all_ranked[:4]
+    excluded_for_roughies = top_4_win + top_4_each_way
+    top_4_roughies = select_roughies(all_ranked, excluded_for_roughies)
+
+    multis = build_multis(eligible_races)
+
+    confidence_average = round(
+        sum(safe_float(runner.get("confidence"), 0) for runner in top_4_win)
+        / max(len(top_4_win), 1),
+        1,
+    )
+
+    condition_data = condition_data or {}
+    track_condition_display = (
+        condition_data.get("track_condition_display")
+        or "Not currently supplied."
+    )
+    weather_display = condition_data.get("weather") or "Not currently supplied."
+
+    return {
+        "success": True,
+        "provider": "Punting Form",
+        "source": "Punting Form API",
+        "prediction_type": "RRT Predictor v2 - Punting Form Weighted Model v1.1",
+        "meeting_id": meeting_id,
+        "meeting_date": condition_data.get("meeting_date"),
+        "track": condition_data.get("track"),
+        "track_condition": track_condition_display,
+        "weather": weather_display,
+        "track_condition_details": condition_data,
+        "eligible_race_count": len(eligible_races),
+        "excluded_barrier_trial_count": len(races) - len(eligible_races),
+        "runner_count": len(all_ranked),
+        "prediction_summary": {
+            "meeting_strength": "Punting Form API Assessment",
+            "confidence_score": confidence_average,
+            "track_bias": condition_track_bias(track_condition_display),
+            "condition_source": condition_data.get("matched_by") or "not_supplied",
+            "scoring_model": (
+                "RRT Punting Form Model v1.1: last10 form, win/place percentage, track record, "
+                "distance record, track-distance record, track-condition record, trainer A2E, "
+                "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
+                "Roughies require price >= 10, price > 0 and market rank >= 6."
+            ),
+        },
+        "predictions": {
+            "top_4_win_bets": [
+                format_runner(runner)
+                for runner in top_4_win
+            ],
+            "top_4_each_way_bets": [
+                format_runner(runner)
+                for runner in top_4_each_way
+            ],
+            "top_4_roughies": [
+                format_runner(runner, category="roughie")
+                for runner in top_4_roughies
+            ],
+            **multis,
+        },
+    }
+
+
+def predict_meeting_from_punting_form(
+    meeting_id: int,
+    race_number: int = 0,
+    runs: int = 10,
+) -> Dict[str, Any]:
+    raw_response = get_meeting_form(
+        meeting_id=meeting_id,
+        race_number=race_number,
+        runs=runs,
+    )
+
+    form_data = simplify_form_response(raw_response)
+
+    condition_data = fetch_condition_for_meeting(
+        meeting_id=meeting_id,
+        form_data=form_data,
+    )
+
+    return predict_from_form_data(
+        form_data=form_data,
+        meeting_id=meeting_id,
+        condition_data=condition_data,
+    )
+
+
+if __name__ == "__main__":
+    result = predict_meeting_from_punting_form(
+        meeting_id=240228,
+        race_number=0,
+        runs=10,
+    )
+
+    print("Success:", result.get("success"))
+    print("Prediction Type:", result.get("prediction_type"))
+    print("Eligible Races:", result.get("eligible_race_count"))
+    print("Excluded Barrier Trials:", result.get("excluded_barrier_trial_count"))
+    print("Runner Count:", result.get("runner_count"))
+
+    predictions = result.get("predictions", {})
+
+    print("\nTOP 4 WIN")
+    for runner in predictions.get("top_4_win_bets", []):
+        print(
+            runner.get("race_title"),
+            "|",
+            runner.get("number"),
+            runner.get("runner"),
+            "| Score:",
+            runner.get("score"),
+            "| Confidence:",
+            runner.get("confidence"),
+        )
+
+    print("\nTOP 4 EACH WAY")
+    for runner in predictions.get("top_4_each_way_bets", []):
+        print(
+            runner.get("race_title"),
+            "|",
+            runner.get("number"),
+            runner.get("runner"),
+            "| Score:",
+            runner.get("score"),
+            "| Confidence:",
+            runner.get("confidence"),
+        )
+
+    print("\nTOP 4 ROUGHIES")
+    for runner in predictions.get("top_4_roughies", []):
+        print(
+            runner.get("race_title"),
+            "|",
+            runner.get("number"),
+            runner.get("runner"),
+            "| Price:",
+            runner.get("price"),
+            "| Market Rank:",
+            runner.get("market_rank"),
+            "| Score:",
+            runner.get("score"),
+            "| Confidence:",
+            runner.get("confidence"),
+        )
+
+    print("\nDOUBLE")
+    for leg in predictions.get("best_double", {}).get("legs", []):
+        selections = ", ".join(
+            f"{runner.get('number')} {runner.get('runner')}"
+            for runner in leg.get("selections", [])
+        )
+        print(leg.get("race_title"), "|", selections)
+
+    print("\nQUADDIE")
+    for leg in predictions.get("best_quaddie", {}).get("legs", []):
+        selections = ", ".join(
+            f"{runner.get('number')} {runner.get('runner')}"
+            for runner in leg.get("selections", [])
+        )
+        print(leg.get("race_title"), "|", selections)
