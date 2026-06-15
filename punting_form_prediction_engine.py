@@ -2,11 +2,16 @@ from typing import Any, Dict, List, Optional
 
 from punting_form_client import (
     get_conditions,
+    get_meeting,
     get_meeting_form,
     get_meeting_ratings,
+    get_scratchings,
     simplify_conditions_response,
     simplify_form_response,
+    simplify_meeting_response,
     simplify_ratings_response,
+    simplify_scratchings_response,
+
 )
 
 
@@ -646,6 +651,302 @@ def fetch_ratings_for_meeting(
         }
 
 
+
+def fetch_scratchings_for_meeting(
+    meeting_id: Optional[int],
+) -> Dict[str, Any]:
+    try:
+        meeting_id_text = str(safe_int(meeting_id, 0))
+
+        if meeting_id_text == "0":
+            return {
+                "success": False,
+                "provider": "Punting Form",
+                "source": "Punting Form API - Updates Scratchings",
+                "scratchings": [],
+                "scratching_count": 0,
+                "matched_by": "invalid_meeting_id",
+            }
+
+        raw_scratchings = get_scratchings()
+        all_scratchings = simplify_scratchings_response(raw_scratchings)
+
+        meeting_scratchings = [
+            scratching for scratching in all_scratchings
+            if str(scratching.get("meeting_id") or "").strip() == meeting_id_text
+        ]
+
+        return {
+            "success": raw_scratchings.get("statusCode") == 200,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Updates Scratchings",
+            "scratchings": meeting_scratchings,
+            "scratching_count": len(meeting_scratchings),
+            "all_scratchings_count": len(all_scratchings),
+            "matched_by": "meeting_id",
+            "raw_status_code": raw_scratchings.get("statusCode"),
+            "raw_error": raw_scratchings.get("error"),
+            "time_stamp": raw_scratchings.get("timeStamp"),
+            "process_time": raw_scratchings.get("processTime"),
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Updates Scratchings",
+            "scratchings": [],
+            "scratching_count": 0,
+            "matched_by": "scratchings_error",
+            "error": str(error),
+        }
+
+
+def build_scratchings_indexes(
+    scratchings: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    by_runner_id: Dict[str, Dict[str, Any]] = {}
+    by_race_tab: Dict[str, Dict[str, Any]] = {}
+    by_race_number_tab: Dict[str, Dict[str, Any]] = {}
+
+    for scratching in scratchings:
+        runner_id = str(scratching.get("runner_id") or "").strip()
+        race_id = str(scratching.get("race_id") or "").strip()
+        race_number = str(scratching.get("race_no") or "").strip()
+        tab_number = str(scratching.get("tab_no") or "").strip()
+
+        if runner_id and runner_id != "0":
+            by_runner_id[runner_id] = scratching
+
+        if race_id and race_id != "0" and tab_number:
+            by_race_tab[f"{race_id}|{tab_number}"] = scratching
+
+        if race_number and tab_number:
+            by_race_number_tab[f"{race_number}|{tab_number}"] = scratching
+
+    return {
+        "by_runner_id": by_runner_id,
+        "by_race_tab": by_race_tab,
+        "by_race_number_tab": by_race_number_tab,
+    }
+
+
+def merge_scratchings_into_form_data(
+    form_data: Dict[str, Any],
+    scratchings_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    scratchings = (scratchings_data or {}).get("scratchings") or []
+    indexes = build_scratchings_indexes(scratchings)
+
+    total_runner_count = 0
+    form_scratched_count = 0
+    scratchings_matched_count = 0
+    excluded_scratchings = []
+    enriched_races = []
+
+    for race in form_data.get("races") or []:
+        enriched_runners = []
+
+        race_id = str(race.get("race_id") or "").strip()
+        race_number = str(race.get("race_number") or "").strip()
+
+        for runner in race.get("runners") or []:
+            total_runner_count += 1
+
+            runner_id = str(runner.get("runner_id") or "").strip()
+            tab_number = str(runner.get("tab_number") or "").strip()
+
+            if runner.get("scratched") is True:
+                form_scratched_count += 1
+
+            scratching = None
+
+            if runner_id and runner_id != "0":
+                scratching = indexes["by_runner_id"].get(runner_id)
+
+            if not scratching and race_id and race_id != "0" and tab_number:
+                scratching = indexes["by_race_tab"].get(f"{race_id}|{tab_number}")
+
+            if not scratching and race_number and tab_number:
+                scratching = indexes["by_race_number_tab"].get(f"{race_number}|{tab_number}")
+
+            is_scratched = bool(runner.get("scratched") or scratching)
+
+            if scratching:
+                scratchings_matched_count += 1
+                excluded_scratchings.append(
+                    {
+                        "race_id": race.get("race_id"),
+                        "race_number": race.get("race_number"),
+                        "race_name": race.get("race_name"),
+                        "tab_number": runner.get("tab_number"),
+                        "runner_id": runner.get("runner_id"),
+                        "runner": runner.get("horse_name"),
+                        "track": scratching.get("track"),
+                        "scratching_time": scratching.get("time_stamp"),
+                        "deduction": scratching.get("deduction"),
+                    }
+                )
+
+            enriched_runners.append(
+                {
+                    **runner,
+                    "scratched": is_scratched,
+                    "scratchings_matched": bool(scratching),
+                    "scratching_details": scratching,
+                }
+            )
+
+        enriched_races.append(
+            {
+                **race,
+                "runners": enriched_runners,
+            }
+        )
+
+    return {
+        **form_data,
+        "races": enriched_races,
+        "scratchings_merge": {
+            "scratchings_success": bool((scratchings_data or {}).get("success")),
+            "scratchings_source": (scratchings_data or {}).get("source"),
+            "scratchings_matched_by": (scratchings_data or {}).get("matched_by"),
+            "scratchings_available_count": len(scratchings),
+            "form_runner_count": total_runner_count,
+            "form_scratched_count": form_scratched_count,
+            "scratchings_matched_count": scratchings_matched_count,
+            "scratchings_excluded_count": scratchings_matched_count + form_scratched_count,
+            "scratchings_unmatched_count": max(len(scratchings) - scratchings_matched_count, 0),
+            "excluded_scratchings": excluded_scratchings,
+        },
+    }
+
+def fetch_meeting_metadata(
+    meeting_id: Optional[int],
+) -> Dict[str, Any]:
+    try:
+        meeting_id_int = safe_int(meeting_id, 0)
+
+        if meeting_id_int <= 0:
+            return {
+                "success": False,
+                "races": [],
+                "race_count": 0,
+                "matched_by": "invalid_meeting_id",
+            }
+
+        raw_meeting = get_meeting(meeting_id_int)
+        simplified = simplify_meeting_response(raw_meeting)
+
+        return {
+            **simplified,
+            "matched_by": "meeting_id",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Meeting",
+            "races": [],
+            "race_count": 0,
+            "matched_by": "meeting_error",
+            "error": str(error),
+        }
+
+
+def build_meeting_race_indexes(
+    meeting_metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    by_race_id: Dict[str, Dict[str, Any]] = {}
+    by_race_number: Dict[str, Dict[str, Any]] = {}
+
+    for race in (meeting_metadata or {}).get("races") or []:
+        race_id = str(race.get("race_id") or "").strip()
+        race_number = str(race.get("race_number") or "").strip()
+
+        if race_id:
+            by_race_id[race_id] = race
+
+        if race_number:
+            by_race_number[race_number] = race
+
+    return {
+        "by_race_id": by_race_id,
+        "by_race_number": by_race_number,
+    }
+
+
+def merge_meeting_metadata_into_form_data(
+    form_data: Dict[str, Any],
+    meeting_metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    indexes = build_meeting_race_indexes(meeting_metadata)
+    matched_count = 0
+    enriched_races = []
+
+    for race in form_data.get("races") or []:
+        race_id = str(race.get("race_id") or "").strip()
+        race_number = str(race.get("race_number") or "").strip()
+
+        metadata = None
+
+        if race_id:
+            metadata = indexes["by_race_id"].get(race_id)
+
+        if not metadata and race_number:
+            metadata = indexes["by_race_number"].get(race_number)
+
+        if metadata:
+            matched_count += 1
+            official_race_name = metadata.get("race_name") or race.get("race_name")
+            enriched_races.append(
+                {
+                    **race,
+                    "race_number": metadata.get("race_number") or race.get("race_number"),
+                    "race_name": official_race_name,
+                    "official_race_name": official_race_name,
+                    "provider_race_id": metadata.get("provider_race_id"),
+                    "distance_m": metadata.get("distance_m") or race.get("distance_m"),
+                    "race_class": metadata.get("race_class") or race.get("race_class"),
+                    "prize_money": metadata.get("prize_money") or race.get("prize_money"),
+                    "start_time": metadata.get("start_time"),
+                    "start_time_utc": metadata.get("start_time_utc"),
+                    "age_restrictions": metadata.get("age_restrictions"),
+                    "jockey_restrictions": metadata.get("jockey_restrictions"),
+                    "weight_type": metadata.get("weight_type"),
+                    "description": metadata.get("description"),
+                    "race_metadata_source": "Punting Form Meeting API",
+                }
+            )
+        else:
+            enriched_races.append(
+                {
+                    **race,
+                    "official_race_name": race.get("race_name"),
+                    "race_metadata_source": "Punting Form Form API fallback",
+                }
+            )
+
+    race_count = len(form_data.get("races") or [])
+
+    return {
+        **form_data,
+        "races": enriched_races,
+        "meeting_metadata_merge": {
+            "meeting_success": bool((meeting_metadata or {}).get("success")),
+            "meeting_source": (meeting_metadata or {}).get("source"),
+            "meeting_matched_by": (meeting_metadata or {}).get("matched_by"),
+            "meeting_race_count": len((meeting_metadata or {}).get("races") or []),
+            "form_race_count": race_count,
+            "race_name_matched_count": matched_count,
+            "race_name_unmatched_count": max(race_count - matched_count, 0),
+            "track": (meeting_metadata or {}).get("track"),
+            "meeting_date": (meeting_metadata or {}).get("meeting_date"),
+        },
+    }
+
+
 def build_rating_indexes(ratings: List[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, Any]]]:
     by_runner_id: Dict[str, Dict[str, Any]] = {}
     by_race_tab: Dict[str, Dict[str, Any]] = {}
@@ -809,6 +1110,8 @@ def predict_from_form_data(
 ) -> Dict[str, Any]:
     races = form_data.get("races") or []
     ratings_merge = form_data.get("ratings_merge") or {}
+    meeting_metadata_merge = form_data.get("meeting_metadata_merge") or {}
+    scratchings_merge = form_data.get("scratchings_merge") or {}
 
     eligible_races = [
         race for race in races
@@ -836,6 +1139,8 @@ def predict_from_form_data(
             "model_version": MODEL_VERSION,
             "prediction_type": PREDICTION_TYPE,
             "ratings_merge": ratings_merge,
+            "meeting_metadata_merge": meeting_metadata_merge,
+            "scratchings_merge": scratchings_merge,
         }
 
     top_4_win = all_ranked[:4]
@@ -865,12 +1170,20 @@ def predict_from_form_data(
         "prediction_type": PREDICTION_TYPE,
         "model_version": MODEL_VERSION,
         "meeting_id": meeting_id,
-        "meeting_date": condition_data.get("meeting_date"),
-        "track": condition_data.get("track"),
+        "meeting_date": (
+            condition_data.get("meeting_date")
+            or meeting_metadata_merge.get("meeting_date")
+        ),
+        "track": (
+            condition_data.get("track")
+            or (meeting_metadata_merge.get("track") or {}).get("name")
+        ),
         "track_condition": track_condition_display,
         "weather": weather_display,
         "track_condition_details": condition_data,
         "ratings_merge": ratings_merge,
+        "meeting_metadata_merge": meeting_metadata_merge,
+        "scratchings_merge": scratchings_merge,
         "eligible_race_count": len(eligible_races),
         "excluded_barrier_trial_count": len(races) - len(eligible_races),
         "runner_count": len(all_ranked),
@@ -882,12 +1195,26 @@ def predict_from_form_data(
             "ratings_source": ratings_merge.get("ratings_source") or "not_supplied",
             "ratings_matched_count": ratings_merge.get("ratings_matched_count"),
             "ratings_unmatched_count": ratings_merge.get("ratings_unmatched_count"),
+            "race_name_source": meeting_metadata_merge.get("meeting_source") or "not_supplied",
+            "race_name_matched_count": meeting_metadata_merge.get("race_name_matched_count"),
+            "race_name_unmatched_count": meeting_metadata_merge.get("race_name_unmatched_count"),
+            "scratchings_source": scratchings_merge.get("scratchings_source") or "not_supplied",
+            "scratchings_available_count": scratchings_merge.get("scratchings_available_count"),
+            "scratchings_excluded_count": scratchings_merge.get("scratchings_excluded_count"),
+            "scratching_impact": (
+                "High"
+                if safe_int(scratchings_merge.get("scratchings_excluded_count"), 0) >= 5
+                else "Moderate"
+                if safe_int(scratchings_merge.get("scratchings_excluded_count"), 0) >= 2
+                else "Low"
+            ),
             "scoring_model": (
                 "RRT Punting Form Model v1.2: last10 form, win/place percentage, track record, "
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
                 "PF AI ratings are merged for comparison only and are not yet used in scoring. "
-                "Roughies require price >= 10, price > 0 and market rank >= 6."
+                "Roughies require price >= 10, price > 0 and market rank >= 6. "
+                "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
         },
         "predictions": {
@@ -920,6 +1247,24 @@ def predict_meeting_from_punting_form(
     )
 
     form_data = simplify_form_response(raw_response)
+
+    meeting_metadata = fetch_meeting_metadata(
+        meeting_id=meeting_id,
+    )
+
+    form_data = merge_meeting_metadata_into_form_data(
+        form_data=form_data,
+        meeting_metadata=meeting_metadata,
+    )
+
+    scratchings_data = fetch_scratchings_for_meeting(
+        meeting_id=meeting_id,
+    )
+
+    form_data = merge_scratchings_into_form_data(
+        form_data=form_data,
+        scratchings_data=scratchings_data,
+    )
 
     condition_data = fetch_condition_for_meeting(
         meeting_id=meeting_id,
@@ -957,6 +1302,7 @@ if __name__ == "__main__":
     print("Excluded Barrier Trials:", result.get("excluded_barrier_trial_count"))
     print("Runner Count:", result.get("runner_count"))
     print("Ratings Merge:", result.get("ratings_merge"))
+    print("Scratchings Merge:", result.get("scratchings_merge"))
 
     predictions = result.get("predictions", {})
 
