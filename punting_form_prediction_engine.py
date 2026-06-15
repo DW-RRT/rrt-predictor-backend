@@ -256,16 +256,16 @@ def score_runner(
     final_score = round(clamp(final_score), 1)
 
     confidence = round(
-        clamp(
-            final_score * 0.78
-            + market_score * 0.10
-            + trainer_jockey_score * 0.07
-            + condition_score * 0.05,
-            10,
+    	clamp(
+            35
+            + ((final_score - 40) * 1.25)
+            + ((trainer_jockey_score - 50) * 0.08)
+            + ((condition_score - 50) * 0.06),
+            20,
             95,
-        ),
-        1,
-    )
+       ),
+       1,
+   )
 
     price = safe_float(runner.get("price_sp"), 0)
 
