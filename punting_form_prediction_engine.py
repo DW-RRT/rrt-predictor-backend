@@ -3,9 +3,15 @@ from typing import Any, Dict, List, Optional
 from punting_form_client import (
     get_conditions,
     get_meeting_form,
+    get_meeting_ratings,
     simplify_conditions_response,
     simplify_form_response,
+    simplify_ratings_response,
 )
+
+
+MODEL_VERSION = "2.7.0"
+PREDICTION_TYPE = "RRT Predictor v2.7 - Punting Form Weighted Model v1.2"
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -28,6 +34,27 @@ def safe_int(value: Any, default: int = 0) -> int:
 
 def clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
     return max(minimum, min(value, maximum))
+
+
+def normalise_text(value: Any) -> str:
+    return (
+        str(value or "")
+        .upper()
+        .replace(".", "")
+        .replace("'", "")
+        .replace("’", "")
+        .replace("-", " ")
+        .strip()
+    )
+
+
+def normalise_date(value: Any) -> str:
+    text = str(value or "").strip()
+
+    if "T" in text:
+        return text.split("T")[0]
+
+    return text[:10]
 
 
 def record_score(record: Optional[Dict[str, Any]]) -> float:
@@ -202,7 +229,27 @@ def is_valid_runner(runner: Dict[str, Any]) -> bool:
     if runner.get("emergencyIndicator") is True:
         return False
 
+    if runner.get("scratched") is True:
+        return False
+
     return True
+
+
+def _rating_payload_from_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "pf_ai_score": runner.get("pf_ai_score"),
+        "pf_ai_price": runner.get("pf_ai_price"),
+        "pf_ai_rank": runner.get("pf_ai_rank"),
+        "is_reliable": runner.get("rating_is_reliable"),
+        "run_style": runner.get("run_style"),
+        "predicted_settle_position": runner.get("predicted_settle_position"),
+        "time_rank": runner.get("time_rank"),
+        "early_time_rank": runner.get("early_time_rank"),
+        "last_600_time_rank": runner.get("last_600_time_rank"),
+        "last_400_time_rank": runner.get("last_400_time_rank"),
+        "last_200_time_rank": runner.get("last_200_time_rank"),
+        "class_change": runner.get("class_change"),
+    }
 
 
 def score_runner(
@@ -239,33 +286,33 @@ def score_runner(
     market_score = score_price(runner.get("price_sp"))
 
     final_score = (
-    	last10_score * 0.15
-    	+ win_place_score * 0.08
-    	+ track_score * 0.08
-    	+ distance_score * 0.09
-    	+ track_distance_score * 0.09
-    	+ condition_score * 0.12
-    	+ trainer_score * 0.10
-    	+ jockey_score * 0.08
-    	+ trainer_jockey_score * 0.12
-    	+ barrier_score * 0.04
-    	+ weight_score * 0.02
-    	+ market_score * 0.03
+        last10_score * 0.15
+        + win_place_score * 0.08
+        + track_score * 0.08
+        + distance_score * 0.09
+        + track_distance_score * 0.09
+        + condition_score * 0.12
+        + trainer_score * 0.10
+        + jockey_score * 0.08
+        + trainer_jockey_score * 0.12
+        + barrier_score * 0.04
+        + weight_score * 0.02
+        + market_score * 0.03
     )
 
     final_score = round(clamp(final_score), 1)
 
     confidence = round(
-    	clamp(
+        clamp(
             35
             + ((final_score - 40) * 1.25)
             + ((trainer_jockey_score - 50) * 0.08)
             + ((condition_score - 50) * 0.06),
             20,
             95,
-       ),
-       1,
-   )
+        ),
+        1,
+    )
 
     price = safe_float(runner.get("price_sp"), 0)
 
@@ -274,14 +321,15 @@ def score_runner(
         "race_id": race.get("race_id"),
         "race_name": race.get("race_name"),
         "race_number": race.get("race_number"),
-	"race_label": f"Race {race.get('race_number')}",
-	"race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
+        "race_label": f"Race {race.get('race_number')}",
+        "race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
         "distance_m": race.get("distance_m"),
         "track_condition": race.get("track_condition"),
         "score": final_score,
         "confidence": confidence,
         "price": price,
         "market_rank": None,
+        "pf_ai": _rating_payload_from_runner(runner),
         "score_breakdown": {
             "last10_form": round(last10_score, 1),
             "win_place": round(win_place_score, 1),
@@ -376,7 +424,9 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "distance_m": runner.get("distance_m"),
         "reason": format_reason(runner, category=category),
         "score_breakdown": runner.get("score_breakdown"),
+        "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
     }
+
 
 def score_race(race: Dict[str, Any]) -> List[Dict[str, Any]]:
     if is_barrier_trial_race(race):
@@ -441,19 +491,19 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
             continue
 
         ranked_races.append(
-    {
-        "race_id": race.get("race_id"),
-        "race_number": race.get("race_number"),
-        "race_label": f"Race {race.get('race_number')}",
-        "race_name": race.get("race_name"),
-        "race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
-        "distance_m": race.get("distance_m"),
-        "selections": [
-            format_runner(runner)
-            for runner in ranked[:3]
-        ],
-    }
-)
+            {
+                "race_id": race.get("race_id"),
+                "race_number": race.get("race_number"),
+                "race_label": f"Race {race.get('race_number')}",
+                "race_name": race.get("race_name"),
+                "race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
+                "distance_m": race.get("distance_m"),
+                "selections": [
+                    format_runner(runner)
+                    for runner in ranked[:3]
+                ],
+            }
+        )
 
     return {
         "best_double": {
@@ -465,28 +515,6 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
             "status": "Active" if len(ranked_races) >= 4 else "Awaiting enough eligible races",
         },
     }
-
-
-
-def normalise_text(value: Any) -> str:
-    return (
-        str(value or "")
-        .upper()
-        .replace(".", "")
-        .replace("'", "")
-        .replace("’", "")
-        .replace("-", " ")
-        .strip()
-    )
-
-
-def normalise_date(value: Any) -> str:
-    text = str(value or "").strip()
-
-    if "T" in text:
-        return text.split("T")[0]
-
-    return text[:10]
 
 
 def get_meeting_track_from_form_data(form_data: Dict[str, Any]) -> str:
@@ -584,6 +612,180 @@ def fetch_condition_for_meeting(
         }
 
 
+def fetch_ratings_for_meeting(
+    meeting_id: Optional[int],
+) -> Dict[str, Any]:
+    try:
+        meeting_id_int = safe_int(meeting_id, 0)
+
+        if meeting_id_int <= 0:
+            return {
+                "success": False,
+                "ratings": [],
+                "rating_count": 0,
+                "matched_by": "invalid_meeting_id",
+            }
+
+        raw_ratings = get_meeting_ratings(meeting_id_int)
+        simplified = simplify_ratings_response(raw_ratings)
+
+        return {
+            **simplified,
+            "matched_by": "meeting_id",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Meeting Ratings",
+            "ratings": [],
+            "rating_count": 0,
+            "matched_by": "ratings_error",
+            "error": str(error),
+        }
+
+
+def build_rating_indexes(ratings: List[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    by_runner_id: Dict[str, Dict[str, Any]] = {}
+    by_race_tab: Dict[str, Dict[str, Any]] = {}
+    by_race_number_tab: Dict[str, Dict[str, Any]] = {}
+    by_name: Dict[str, Dict[str, Any]] = {}
+
+    for rating in ratings:
+        runner_id = str(rating.get("runner_id") or "").strip()
+        race_id = str(rating.get("race_id") or "").strip()
+        race_number = str(rating.get("race_number") or "").strip()
+        tab_number = str(rating.get("tab_number") or "").strip()
+        runner_name = normalise_text(rating.get("runner_name"))
+
+        if runner_id:
+            by_runner_id[runner_id] = rating
+
+        if race_id and tab_number:
+            by_race_tab[f"{race_id}|{tab_number}"] = rating
+
+        if race_number and tab_number:
+            by_race_number_tab[f"{race_number}|{tab_number}"] = rating
+
+        if race_number and runner_name:
+            by_name[f"{race_number}|{runner_name}"] = rating
+
+    return {
+        "by_runner_id": by_runner_id,
+        "by_race_tab": by_race_tab,
+        "by_race_number_tab": by_race_number_tab,
+        "by_name": by_name,
+    }
+
+
+def apply_rating_to_runner(
+    runner: Dict[str, Any],
+    rating: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not rating:
+        return {
+            **runner,
+            "ratings_matched": False,
+            "pf_ai_score": None,
+            "pf_ai_price": None,
+            "pf_ai_rank": None,
+        }
+
+    return {
+        **runner,
+        "ratings_matched": True,
+        "rating_is_reliable": rating.get("is_reliable"),
+        "pf_ai_score": rating.get("pf_ai_score"),
+        "pf_ai_price": rating.get("pf_ai_price"),
+        "pf_ai_rank": rating.get("pf_ai_rank"),
+        "run_style": rating.get("run_style"),
+        "predicted_settle_position": rating.get("predicted_settle_position"),
+        "average_historical_settle_position": rating.get("average_historical_settle_position"),
+        "time_rank": rating.get("time_rank"),
+        "time_price": rating.get("time_price"),
+        "early_time_rank": rating.get("early_time_rank"),
+        "early_time_price": rating.get("early_time_price"),
+        "last_600_time_rank": rating.get("last_600_time_rank"),
+        "last_600_time_price": rating.get("last_600_time_price"),
+        "last_400_time_rank": rating.get("last_400_time_rank"),
+        "last_400_time_price": rating.get("last_400_time_price"),
+        "last_200_time_rank": rating.get("last_200_time_rank"),
+        "last_200_time_price": rating.get("last_200_time_price"),
+        "class_change": rating.get("class_change"),
+        "ratings_raw": rating.get("raw"),
+    }
+
+
+def merge_ratings_into_form_data(
+    form_data: Dict[str, Any],
+    ratings_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    ratings = (ratings_data or {}).get("ratings") or []
+    indexes = build_rating_indexes(ratings)
+
+    matched_count = 0
+    total_count = 0
+    enriched_races = []
+
+    for race in form_data.get("races") or []:
+        enriched_runners = []
+
+        for runner in race.get("runners") or []:
+            total_count += 1
+
+            runner_id = str(runner.get("runner_id") or "").strip()
+            race_id = str(race.get("race_id") or "").strip()
+            race_number = str(race.get("race_number") or "").strip()
+            tab_number = str(runner.get("tab_number") or "").strip()
+            runner_name = normalise_text(runner.get("horse_name"))
+
+            rating = None
+
+            if runner_id:
+                rating = indexes["by_runner_id"].get(runner_id)
+
+            if not rating and race_id and tab_number:
+                rating = indexes["by_race_tab"].get(f"{race_id}|{tab_number}")
+
+            if not rating and race_number and tab_number:
+                rating = indexes["by_race_number_tab"].get(f"{race_number}|{tab_number}")
+
+            if not rating and race_number and runner_name:
+                rating = indexes["by_name"].get(f"{race_number}|{runner_name}")
+
+            if rating:
+                matched_count += 1
+
+            enriched_runners.append(
+                apply_rating_to_runner(
+                    runner=runner,
+                    rating=rating,
+                )
+            )
+
+        enriched_races.append(
+            {
+                **race,
+                "runners": enriched_runners,
+            }
+        )
+
+    return {
+        **form_data,
+        "races": enriched_races,
+        "ratings_merge": {
+            "ratings_success": bool((ratings_data or {}).get("success")),
+            "ratings_source": (ratings_data or {}).get("source"),
+            "ratings_matched_by": (ratings_data or {}).get("matched_by"),
+            "ratings_available_count": len(ratings),
+            "ratings_runner_count": total_count,
+            "ratings_matched_count": matched_count,
+            "ratings_unmatched_count": max(total_count - matched_count, 0),
+        },
+    }
+
+
 def condition_track_bias(track_condition: str) -> str:
     condition = str(track_condition or "").upper()
 
@@ -599,9 +801,14 @@ def condition_track_bias(track_condition: str) -> str:
     return "Neutral"
 
 
-
-def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] = None, condition_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def predict_from_form_data(
+    form_data: Dict[str, Any],
+    meeting_id: Optional[int] = None,
+    condition_data: Optional[Dict[str, Any]] = None,
+    ratings_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     races = form_data.get("races") or []
+    ratings_merge = form_data.get("ratings_merge") or {}
 
     eligible_races = [
         race for race in races
@@ -626,6 +833,9 @@ def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] 
             "message": "No eligible non-barrier-trial races available for prediction.",
             "meeting_id": meeting_id,
             "eligible_race_count": 0,
+            "model_version": MODEL_VERSION,
+            "prediction_type": PREDICTION_TYPE,
+            "ratings_merge": ratings_merge,
         }
 
     top_4_win = all_ranked[:4]
@@ -652,14 +862,15 @@ def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] 
         "success": True,
         "provider": "Punting Form",
         "source": "Punting Form API",
-        "prediction_type": "RRT Predictor v2.7 - Punting Form Weighted Model v1.2",
-        "model_version": "2.7.0",
+        "prediction_type": PREDICTION_TYPE,
+        "model_version": MODEL_VERSION,
         "meeting_id": meeting_id,
         "meeting_date": condition_data.get("meeting_date"),
         "track": condition_data.get("track"),
         "track_condition": track_condition_display,
         "weather": weather_display,
         "track_condition_details": condition_data,
+        "ratings_merge": ratings_merge,
         "eligible_race_count": len(eligible_races),
         "excluded_barrier_trial_count": len(races) - len(eligible_races),
         "runner_count": len(all_ranked),
@@ -668,10 +879,14 @@ def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] 
             "confidence_score": confidence_average,
             "track_bias": condition_track_bias(track_condition_display),
             "condition_source": condition_data.get("matched_by") or "not_supplied",
+            "ratings_source": ratings_merge.get("ratings_source") or "not_supplied",
+            "ratings_matched_count": ratings_merge.get("ratings_matched_count"),
+            "ratings_unmatched_count": ratings_merge.get("ratings_unmatched_count"),
             "scoring_model": (
-                "RRT Punting Form Model v1.1: last10 form, win/place percentage, track record, "
+                "RRT Punting Form Model v1.2: last10 form, win/place percentage, track record, "
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
+                "PF AI ratings are merged for comparison only and are not yet used in scoring. "
                 "Roughies require price >= 10, price > 0 and market rank >= 6."
             ),
         },
@@ -711,25 +926,37 @@ def predict_meeting_from_punting_form(
         form_data=form_data,
     )
 
+    ratings_data = fetch_ratings_for_meeting(
+        meeting_id=meeting_id,
+    )
+
+    form_data = merge_ratings_into_form_data(
+        form_data=form_data,
+        ratings_data=ratings_data,
+    )
+
     return predict_from_form_data(
         form_data=form_data,
         meeting_id=meeting_id,
         condition_data=condition_data,
+        ratings_data=ratings_data,
     )
 
 
 if __name__ == "__main__":
     result = predict_meeting_from_punting_form(
-        meeting_id=240228,
+        meeting_id=240369,
         race_number=0,
         runs=10,
     )
 
     print("Success:", result.get("success"))
     print("Prediction Type:", result.get("prediction_type"))
+    print("Model Version:", result.get("model_version"))
     print("Eligible Races:", result.get("eligible_race_count"))
     print("Excluded Barrier Trials:", result.get("excluded_barrier_trial_count"))
     print("Runner Count:", result.get("runner_count"))
+    print("Ratings Merge:", result.get("ratings_merge"))
 
     predictions = result.get("predictions", {})
 
@@ -744,6 +971,8 @@ if __name__ == "__main__":
             runner.get("score"),
             "| Confidence:",
             runner.get("confidence"),
+            "| PF AI:",
+            runner.get("pf_ai"),
         )
 
     print("\nTOP 4 EACH WAY")
@@ -757,6 +986,8 @@ if __name__ == "__main__":
             runner.get("score"),
             "| Confidence:",
             runner.get("confidence"),
+            "| PF AI:",
+            runner.get("pf_ai"),
         )
 
     print("\nTOP 4 ROUGHIES")
@@ -774,6 +1005,8 @@ if __name__ == "__main__":
             runner.get("score"),
             "| Confidence:",
             runner.get("confidence"),
+            "| PF AI:",
+            runner.get("pf_ai"),
         )
 
     print("\nDOUBLE")

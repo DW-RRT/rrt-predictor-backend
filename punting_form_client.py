@@ -74,6 +74,31 @@ def get_conditions() -> Dict[str, Any]:
     )
 
 
+def get_meeting_ratings(
+    meeting_id: int,
+) -> Dict[str, Any]:
+    return make_request(
+        "/v2/Ratings/MeetingRatings",
+        {
+            "meetingId": meeting_id,
+        },
+    )
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _format_track_condition(condition: str, condition_number: str) -> str:
+    condition = _clean_text(condition)
+    condition_number = _clean_text(condition_number)
+
+    if condition and condition_number:
+        return f"{condition} {condition_number}"
+
+    return condition or condition_number or "Not currently supplied."
+
+
 def simplify_meetings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
     meetings = []
 
@@ -185,6 +210,9 @@ def simplify_form_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
                 "trainer_a2e_last100": runner.get("trainerA2E_Last100"),
                 "jockey_a2e_last100": runner.get("jockeyA2E_Last100"),
                 "trainer_jockey_a2e_last100": runner.get("trainerJockeyA2E_Last100"),
+                "emergencyIndicator": runner.get("emergencyIndicator"),
+                "scratched": bool(runner.get("scratched") or runner.get("isScratched")),
+                "status": runner.get("status"),
                 "historical_forms": forms,
             }
         )
@@ -202,20 +230,6 @@ def simplify_form_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
         "raw_status_code": api_response.get("statusCode"),
         "raw_error": api_response.get("error"),
     }
-
-
-def _clean_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _format_track_condition(condition: str, condition_number: str) -> str:
-    condition = _clean_text(condition)
-    condition_number = _clean_text(condition_number)
-
-    if condition and condition_number:
-        return f"{condition} {condition_number}"
-
-    return condition or condition_number or "Not currently supplied."
 
 
 def simplify_conditions_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -256,6 +270,68 @@ def simplify_conditions_response(api_response: Dict[str, Any]) -> Dict[str, Any]
         "source": "Punting Form API - Updates Conditions",
         "condition_count": len(conditions),
         "conditions": conditions,
+        "raw_status_code": api_response.get("statusCode"),
+        "raw_error": api_response.get("error"),
+        "time_stamp": api_response.get("timeStamp"),
+        "process_time": api_response.get("processTime"),
+    }
+
+
+def simplify_ratings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
+    ratings: List[Dict[str, Any]] = []
+
+    for item in api_response.get("payLoad") or []:
+        ratings.append(
+            {
+                "meeting_date": item.get("meetingDate"),
+                "track": _clean_text(item.get("track")),
+                "meeting_id": item.get("meetingId"),
+                "race_id": str(item.get("raceId") or ""),
+                "runner_id": item.get("runnerId"),
+                "race_number": item.get("raceNo"),
+                "runner_name": _clean_text(item.get("runnerName")),
+                "tab_number": item.get("tabNo"),
+                "is_reliable": bool(item.get("isReliable")),
+                "barrier": item.get("barrier"),
+                "track_condition": item.get("trackCondition"),
+
+                "pf_ai_score": item.get("pfaiScore"),
+                "pf_ai_price": item.get("pfaiPrice"),
+                "pf_ai_rank": item.get("pfaiRank"),
+
+                "neural_price": item.get("neuralPrice"),
+                "neural_price_rank": item.get("neuralPriceRank"),
+                "weight_class_rank": item.get("weightClassRank"),
+                "weight_class_price": item.get("weightClassPrice"),
+                "time_adjusted_weight_class_rank": item.get("timeAdjustedWeightClassRank"),
+                "time_adjusted_weight_class_price": item.get("timeAdjustedWeightClassPrice"),
+                "class_change": item.get("classChange"),
+
+                "predicted_settle_position": item.get("predictedSettlePostion"),
+                "average_historical_settle_position": item.get("averageHistoricalSettlePosition"),
+                "run_style": _clean_text(item.get("runStyle")),
+
+                "time_rank": item.get("timeRank"),
+                "time_price": item.get("timePrice"),
+                "early_time_rank": item.get("earlyTimeRank"),
+                "early_time_price": item.get("earlyTimePrice"),
+                "last_600_time_rank": item.get("last600TimeRank"),
+                "last_600_time_price": item.get("last600TimePrice"),
+                "last_400_time_rank": item.get("last400TimeRank"),
+                "last_400_time_price": item.get("last400TimePrice"),
+                "last_200_time_rank": item.get("last200TimeRank"),
+                "last_200_time_price": item.get("last200TimePrice"),
+
+                "raw": item,
+            }
+        )
+
+    return {
+        "success": api_response.get("statusCode") == 200,
+        "provider": "Punting Form",
+        "source": "Punting Form API - Meeting Ratings",
+        "rating_count": len(ratings),
+        "ratings": ratings,
         "raw_status_code": api_response.get("statusCode"),
         "raw_error": api_response.get("error"),
         "time_stamp": api_response.get("timeStamp"),

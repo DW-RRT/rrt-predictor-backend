@@ -7,9 +7,11 @@ import time
 
 from punting_form_client import (
     get_conditions,
+    get_meeting_ratings,
     get_meetings_list,
     simplify_conditions_response,
     simplify_meetings_response,
+    simplify_ratings_response,
 )
 
 from punting_form_prediction_engine import (
@@ -726,7 +728,7 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.5.0",
+        "version": "2.7.0",
     }
 
 
@@ -1089,6 +1091,23 @@ def api_punting_form_conditions():
         return {
             "success": False,
             "provider": "Punting Form",
+            "error": str(error),
+        }
+
+
+@app.get("/api/punting-form-ratings")
+def api_punting_form_ratings(
+    meeting_id: int,
+):
+    try:
+        response = get_meeting_ratings(meeting_id=meeting_id)
+        return simplify_ratings_response(response)
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "meeting_id": meeting_id,
             "error": str(error),
         }
 
