@@ -736,7 +736,7 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.6.0",
+        "version": "2.7.0",
         "cache_ttl_seconds": 300
     }
 

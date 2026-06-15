@@ -239,18 +239,18 @@ def score_runner(
     market_score = score_price(runner.get("price_sp"))
 
     final_score = (
-        last10_score * 0.17
-        + win_place_score * 0.10
-        + track_score * 0.08
-        + distance_score * 0.10
-        + track_distance_score * 0.08
-        + condition_score * 0.10
-        + trainer_score * 0.09
-        + jockey_score * 0.09
-        + trainer_jockey_score * 0.08
-        + barrier_score * 0.05
-        + weight_score * 0.03
-        + market_score * 0.03
+    	last10_score * 0.15
+    	+ win_place_score * 0.08
+    	+ track_score * 0.08
+    	+ distance_score * 0.09
+    	+ track_distance_score * 0.09
+    	+ condition_score * 0.12
+    	+ trainer_score * 0.10
+    	+ jockey_score * 0.08
+    	+ trainer_jockey_score * 0.12
+    	+ barrier_score * 0.04
+    	+ weight_score * 0.02
+    	+ market_score * 0.03
     )
 
     final_score = round(clamp(final_score), 1)
@@ -652,7 +652,7 @@ def predict_from_form_data(form_data: Dict[str, Any], meeting_id: Optional[int] 
         "success": True,
         "provider": "Punting Form",
         "source": "Punting Form API",
-        "prediction_type": "RRT Predictor v2 - Punting Form Weighted Model v1.1",
+        "prediction_type": "RRT Predictor v2 - Punting Form Weighted Model v1.2",
         "meeting_id": meeting_id,
         "meeting_date": condition_data.get("meeting_date"),
         "track": condition_data.get("track"),
