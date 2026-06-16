@@ -47,7 +47,7 @@ from database_upload_routes import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.7.0",
+    version="2.8.0",
 )
 
 app.add_middleware(
@@ -730,10 +730,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.7.0",
+        "version": "2.8.0",
         "app_version": "1.0.0",
-        "backend_version": "2.7.0",
-        "model_version": "2.7.0",
+        "backend_version": "2.8.0",
+        "model_version": "2.8.0",
     }
 
 
@@ -743,10 +743,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.7.0",
+        "version": "2.8.0",
         "app_version": "1.0.0",
-        "backend_version": "2.7.0",
-        "model_version": "2.7.0",
+        "backend_version": "2.8.0",
+        "model_version": "2.8.0",
         "cache_ttl_seconds": 300
     }
 
