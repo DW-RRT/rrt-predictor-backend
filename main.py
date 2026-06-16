@@ -6,6 +6,7 @@ from urllib.parse import quote
 import time
 
 from punting_form_client import (
+    make_request,
     get_conditions,
     get_meeting,
     get_meeting_ratings,
@@ -47,7 +48,7 @@ from database_upload_routes import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.8.0",
+    version="2.8.1",
 )
 
 app.add_middleware(
@@ -65,6 +66,9 @@ app.add_middleware(
 
 CACHE_TTL_SECONDS = 300
 CACHE: Dict[str, Dict[str, Any]] = {}
+
+PREDICTION_HISTORY: Dict[str, Dict[str, Any]] = {}
+
 
 
 def _cache_get(key: str) -> Optional[Any]:
@@ -730,10 +734,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.8.0",
+        "version": "2.8.1",
         "app_version": "1.0.0",
-        "backend_version": "2.8.0",
-        "model_version": "2.8.0",
+        "backend_version": "2.8.1",
+        "model_version": "2.8.1",
     }
 
 
@@ -743,10 +747,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.8.0",
+        "version": "2.8.1",
         "app_version": "1.0.0",
-        "backend_version": "2.8.0",
-        "model_version": "2.8.0",
+        "backend_version": "2.8.1",
+        "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
 
@@ -1065,6 +1069,433 @@ def api_predict(
         },
     }
 
+
+# ---------------------------------------------------------------------
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.8.1)
+# ---------------------------------------------------------------------
+
+def _normalise_runner_name(value: Any) -> str:
+    return (
+        str(value or "")
+        .upper()
+        .replace(".", "")
+        .replace("'", "")
+        .replace("’", "")
+        .replace("-", " ")
+        .strip()
+    )
+
+
+def _normalise_api_date(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+
+    if not text:
+        return None
+
+    if "T" in text:
+        return text.split("T")[0]
+
+    return text[:10]
+
+
+def _get_punting_form_results(meeting_id: int) -> Dict[str, Any]:
+    return make_request(
+        "/v2/form/results",
+        {
+            "meetingId": meeting_id,
+        },
+    )
+
+
+def _simplify_punting_form_results(api_response: Dict[str, Any]) -> Dict[str, Any]:
+    payload = api_response.get("payLoad") or []
+    meeting = payload[0] if payload else {}
+
+    races = []
+
+    for race in meeting.get("raceResults") or []:
+        runners = []
+
+        for runner in race.get("runners") or []:
+            runners.append(
+                {
+                    "position": runner.get("position"),
+                    "margin": runner.get("margin"),
+                    "tab_number": runner.get("tabNo"),
+                    "runner": runner.get("runner"),
+                    "runner_id": runner.get("runnerId"),
+                    "trainer": runner.get("trainer"),
+                    "trainer_id": runner.get("trainerId"),
+                    "jockey": runner.get("jockey"),
+                    "jockey_id": runner.get("jockeyId"),
+                    "barrier": runner.get("barrier"),
+                    "weight": runner.get("weight"),
+                    "price": runner.get("price"),
+                    "in_run": runner.get("inRun"),
+                    "flucs": runner.get("flucs"),
+                    "gear_changes": runner.get("gearChanges"),
+                    "raw": runner,
+                }
+            )
+
+        runners.sort(
+            key=lambda item: (
+                item.get("position") is None,
+                item.get("position") or 999,
+            )
+        )
+
+        winner = next(
+            (runner for runner in runners if runner.get("position") == 1),
+            None,
+        )
+
+        placegetters = [
+            runner for runner in runners
+            if runner.get("position") in [1, 2, 3]
+        ]
+
+        races.append(
+            {
+                "race_id": race.get("raceId"),
+                "race_number": race.get("raceNumber"),
+                "distance_m": race.get("distance"),
+                "race_class": race.get("raceClass"),
+                "track_condition": race.get("trackConditionLabel"),
+                "track_condition_number": race.get("trackConditionNumber"),
+                "official_race_time": race.get("officialRaceTimeString"),
+                "winner": winner,
+                "placegetters": placegetters,
+                "runners": runners,
+                "raw": race,
+            }
+        )
+
+    races.sort(
+        key=lambda race: (
+            race.get("race_number") is None,
+            race.get("race_number") or 999,
+        )
+    )
+
+    return {
+        "success": api_response.get("statusCode") == 200,
+        "provider": "Punting Form",
+        "source": "Punting Form API - Results",
+        "meeting_id": meeting.get("meetingId"),
+        "track": meeting.get("track"),
+        "track_id": meeting.get("trackId"),
+        "meeting_date": _normalise_api_date(meeting.get("meetingDate")),
+        "results_updated": meeting.get("resultsUpdated"),
+        "race_count": len(races),
+        "races": races,
+        "raw_status_code": api_response.get("statusCode"),
+        "raw_error": api_response.get("error"),
+        "time_stamp": api_response.get("timeStamp"),
+        "process_time": api_response.get("processTime"),
+    }
+
+
+def _save_prediction_snapshot(
+    meeting_id: int,
+    prediction_response: Dict[str, Any],
+) -> Dict[str, Any]:
+    snapshot = {
+        "meeting_id": meeting_id,
+        "saved_at": datetime.utcnow().isoformat() + "Z",
+        "provider": prediction_response.get("provider"),
+        "source": prediction_response.get("source"),
+        "prediction_type": prediction_response.get("prediction_type"),
+        "model_version": "2.8.1",
+        "meeting_date": prediction_response.get("meeting_date"),
+        "track": prediction_response.get("track"),
+        "track_condition": prediction_response.get("track_condition"),
+        "weather": prediction_response.get("weather"),
+        "eligible_race_count": prediction_response.get("eligible_race_count"),
+        "runner_count": prediction_response.get("runner_count"),
+        "prediction_summary": prediction_response.get("prediction_summary"),
+        "predictions": prediction_response.get("predictions") or {},
+    }
+
+    PREDICTION_HISTORY[str(meeting_id)] = snapshot
+    return snapshot
+
+
+def _get_runner_result(
+    results_by_race: Dict[str, Dict[str, Any]],
+    race_number: Any,
+    runner_name: Any,
+    tab_number: Any = None,
+) -> Optional[Dict[str, Any]]:
+    race = results_by_race.get(str(race_number or "").strip())
+
+    if not race:
+        return None
+
+    normalised_name = _normalise_runner_name(runner_name)
+    normalised_tab = str(tab_number or "").strip()
+
+    for runner in race.get("runners") or []:
+        if normalised_tab and str(runner.get("tab_number") or "").strip() == normalised_tab:
+            return runner
+
+    for runner in race.get("runners") or []:
+        if _normalise_runner_name(runner.get("runner")) == normalised_name:
+            return runner
+
+    return None
+
+
+def _score_prediction_list(
+    selections: List[Dict[str, Any]],
+    results_by_race: Dict[str, Dict[str, Any]],
+    place_positions: List[int],
+) -> Dict[str, Any]:
+    evaluated = []
+    hits = 0
+
+    for selection in selections:
+        race_number = selection.get("race_number")
+        runner_name = selection.get("runner") or selection.get("horse_name")
+        tab_number = selection.get("number")
+
+        result = _get_runner_result(
+            results_by_race=results_by_race,
+            race_number=race_number,
+            runner_name=runner_name,
+            tab_number=tab_number,
+        )
+
+        actual_position = result.get("position") if result else None
+        hit = actual_position in place_positions if actual_position is not None else False
+
+        if hit:
+            hits += 1
+
+        evaluated.append(
+            {
+                "race_number": race_number,
+                "selection": runner_name,
+                "tab_number": tab_number,
+                "actual_position": actual_position,
+                "actual_price": result.get("price") if result else None,
+                "hit": hit,
+                "matched": bool(result),
+            }
+        )
+
+    total = len(evaluated)
+
+    return {
+        "hits": hits,
+        "total": total,
+        "strike_rate": round((hits / total) * 100, 1) if total else 0,
+        "selections": evaluated,
+    }
+
+
+def _score_multi(
+    multi: Dict[str, Any],
+    results_by_race: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    legs = multi.get("legs") or []
+    evaluated_legs = []
+    successful_legs = 0
+
+    for leg in legs:
+        race_number = leg.get("race_number")
+        selections = leg.get("selections") or []
+
+        leg_hit = False
+        evaluated_selections = []
+
+        for selection in selections:
+            runner_name = selection.get("runner") or selection.get("horse_name")
+            tab_number = selection.get("number")
+
+            result = _get_runner_result(
+                results_by_race=results_by_race,
+                race_number=race_number,
+                runner_name=runner_name,
+                tab_number=tab_number,
+            )
+
+            actual_position = result.get("position") if result else None
+            hit = actual_position == 1 if actual_position is not None else False
+
+            if hit:
+                leg_hit = True
+
+            evaluated_selections.append(
+                {
+                    "selection": runner_name,
+                    "tab_number": tab_number,
+                    "actual_position": actual_position,
+                    "actual_price": result.get("price") if result else None,
+                    "winner": hit,
+                    "matched": bool(result),
+                }
+            )
+
+        if leg_hit:
+            successful_legs += 1
+
+        evaluated_legs.append(
+            {
+                "race_number": race_number,
+                "race_name": leg.get("race_name"),
+                "race_title": leg.get("race_title"),
+                "leg_hit": leg_hit,
+                "selections": evaluated_selections,
+            }
+        )
+
+    total = len(evaluated_legs)
+
+    return {
+        "success": total > 0 and successful_legs == total,
+        "successful_legs": successful_legs,
+        "total_legs": total,
+        "strike_rate": round((successful_legs / total) * 100, 1) if total else 0,
+        "legs": evaluated_legs,
+    }
+
+
+def _flatten_pf_ai_ranked_predictions(
+    prediction_snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    predictions = prediction_snapshot.get("predictions") or {}
+    all_selections = []
+
+    for category_key in [
+        "top_4_win_bets",
+        "top_4_each_way_bets",
+        "top_4_roughies",
+    ]:
+        for runner in predictions.get(category_key) or []:
+            pf_ai = runner.get("pf_ai") or {}
+            pf_rank = pf_ai.get("pf_ai_rank")
+
+            if pf_rank is None:
+                continue
+
+            all_selections.append(
+                {
+                    **runner,
+                    "category": category_key,
+                    "pf_ai_rank": pf_rank,
+                }
+            )
+
+    return sorted(
+        all_selections,
+        key=lambda item: (
+            item.get("pf_ai_rank") is None,
+            item.get("pf_ai_rank") or 999,
+        )
+    )
+
+
+def _compare_prediction_to_results(
+    prediction_snapshot: Dict[str, Any],
+    results: Dict[str, Any],
+) -> Dict[str, Any]:
+    predictions = prediction_snapshot.get("predictions") or {}
+    races = results.get("races") or []
+
+    results_by_race = {
+        str(race.get("race_number") or "").strip(): race
+        for race in races
+    }
+
+    top_win = _score_prediction_list(
+        selections=predictions.get("top_4_win_bets") or [],
+        results_by_race=results_by_race,
+        place_positions=[1],
+    )
+
+    top_each_way = _score_prediction_list(
+        selections=predictions.get("top_4_each_way_bets") or [],
+        results_by_race=results_by_race,
+        place_positions=[1, 2, 3],
+    )
+
+    roughies = _score_prediction_list(
+        selections=predictions.get("top_4_roughies") or [],
+        results_by_race=results_by_race,
+        place_positions=[1, 2, 3, 4],
+    )
+
+    double_result = _score_multi(
+        multi=predictions.get("best_double") or {},
+        results_by_race=results_by_race,
+    )
+
+    quaddie_result = _score_multi(
+        multi=predictions.get("best_quaddie") or {},
+        results_by_race=results_by_race,
+    )
+
+    pf_ai_ranked = _flatten_pf_ai_ranked_predictions(prediction_snapshot)
+
+    pf_ai_top_4 = _score_prediction_list(
+        selections=pf_ai_ranked[:4],
+        results_by_race=results_by_race,
+        place_positions=[1],
+    )
+
+    weighted_components = [
+        (top_win.get("strike_rate", 0), 0.35),
+        (top_each_way.get("strike_rate", 0), 0.25),
+        (roughies.get("strike_rate", 0), 0.15),
+        (double_result.get("strike_rate", 0), 0.15),
+        (quaddie_result.get("strike_rate", 0), 0.10),
+    ]
+
+    overall_accuracy = round(
+        sum(score * weight for score, weight in weighted_components),
+        1,
+    )
+
+    return {
+        "success": True,
+        "provider": "Punting Form",
+        "source": "RRT Predictor v2.8.1 Accuracy Tracking",
+        "meeting_id": prediction_snapshot.get("meeting_id"),
+        "track": results.get("track") or prediction_snapshot.get("track"),
+        "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
+        "results_updated": results.get("results_updated"),
+        "prediction_saved_at": prediction_snapshot.get("saved_at"),
+        "model_version": prediction_snapshot.get("model_version"),
+        "prediction_type": prediction_snapshot.get("prediction_type"),
+        "accuracy": {
+            "top_4_win": top_win,
+            "top_4_each_way": top_each_way,
+            "top_4_roughies": roughies,
+            "best_double": double_result,
+            "best_quaddie": quaddie_result,
+            "overall_accuracy": overall_accuracy,
+        },
+        "pf_ai_comparison": {
+            "status": "Monitoring only",
+            "note": "PF AI ranks are compared where available but are not used in RRT scoring.",
+            "pf_ai_top_4_win": pf_ai_top_4,
+        },
+        "results_summary": {
+            "race_count": len(races),
+            "winners": [
+                {
+                    "race_number": race.get("race_number"),
+                    "runner": (race.get("winner") or {}).get("runner"),
+                    "tab_number": (race.get("winner") or {}).get("tab_number"),
+                    "price": (race.get("winner") or {}).get("price"),
+                }
+                for race in races
+            ],
+        },
+    }
+
+
 # ---------------------------------------------------------------------
 # Punting Form Routes (RRT Predictor v2)
 # ---------------------------------------------------------------------
@@ -1127,11 +1558,26 @@ def api_punting_form_predict(
     runs: int = 10,
 ):
     try:
-        return predict_meeting_from_punting_form(
+        prediction_response = predict_meeting_from_punting_form(
             meeting_id=meeting_id,
             race_number=race_number,
             runs=runs,
         )
+
+        if prediction_response.get("success"):
+            snapshot = _save_prediction_snapshot(
+                meeting_id=meeting_id,
+                prediction_response=prediction_response,
+            )
+
+            prediction_response["prediction_history"] = {
+                "saved": True,
+                "saved_at": snapshot.get("saved_at"),
+                "storage": "in_memory",
+                "note": "Prediction snapshot stored for v2.8.1 Results API accuracy tracking.",
+            }
+
+        return prediction_response
 
     except Exception as error:
         return {
@@ -1140,6 +1586,111 @@ def api_punting_form_predict(
             "meeting_id": meeting_id,
             "error": str(error),
         }
+
+
+@app.get("/api/punting-form-results")
+def api_punting_form_results(
+    meeting_id: int,
+):
+    try:
+        raw_results = _get_punting_form_results(meeting_id=meeting_id)
+        return _simplify_punting_form_results(raw_results)
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Results",
+            "meeting_id": meeting_id,
+            "error": str(error),
+        }
+
+
+@app.get("/api/punting-form-prediction-history")
+def api_punting_form_prediction_history(
+    meeting_id: Optional[int] = Query(None),
+):
+    if meeting_id is not None:
+        snapshot = PREDICTION_HISTORY.get(str(meeting_id))
+
+        if not snapshot:
+            return {
+                "success": False,
+                "provider": "RRT Predictor",
+                "source": "In-memory Prediction History",
+                "meeting_id": meeting_id,
+                "message": "No prediction snapshot found for this meeting. Run /api/punting-form-predict first.",
+            }
+
+        return {
+            "success": True,
+            "provider": "RRT Predictor",
+            "source": "In-memory Prediction History",
+            "meeting_id": meeting_id,
+            "snapshot": snapshot,
+        }
+
+    return {
+        "success": True,
+        "provider": "RRT Predictor",
+        "source": "In-memory Prediction History",
+        "snapshot_count": len(PREDICTION_HISTORY),
+        "meetings": [
+            {
+                "meeting_id": snapshot.get("meeting_id"),
+                "track": snapshot.get("track"),
+                "meeting_date": snapshot.get("meeting_date"),
+                "saved_at": snapshot.get("saved_at"),
+                "model_version": snapshot.get("model_version"),
+            }
+            for snapshot in PREDICTION_HISTORY.values()
+        ],
+    }
+
+
+@app.get("/api/punting-form-performance")
+def api_punting_form_performance(
+    meeting_id: int,
+):
+    try:
+        prediction_snapshot = PREDICTION_HISTORY.get(str(meeting_id))
+
+        if not prediction_snapshot:
+            return {
+                "success": False,
+                "provider": "RRT Predictor",
+                "source": "RRT Predictor v2.8.1 Accuracy Tracking",
+                "meeting_id": meeting_id,
+                "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
+            }
+
+        raw_results = _get_punting_form_results(meeting_id=meeting_id)
+        simplified_results = _simplify_punting_form_results(raw_results)
+
+        if not simplified_results.get("success"):
+            return {
+                "success": False,
+                "provider": "Punting Form",
+                "source": "Punting Form API - Results",
+                "meeting_id": meeting_id,
+                "message": "Results API did not return a successful response.",
+                "results": simplified_results,
+            }
+
+        return _compare_prediction_to_results(
+            prediction_snapshot=prediction_snapshot,
+            results=simplified_results,
+        )
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "RRT Predictor",
+            "source": "RRT Predictor v2.8.1 Accuracy Tracking",
+            "meeting_id": meeting_id,
+            "error": str(error),
+        }
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -103,6 +103,38 @@ def get_scratchings() -> Dict[str, Any]:
     )
 
 
+def get_results(
+    meeting_id: int,
+) -> Dict[str, Any]:
+    return make_request(
+        "/v2/form/results",
+        {
+            "meetingId": meeting_id,
+        },
+    )
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _format_track_condition(condition: Any, condition_number: Any) -> str:
+    condition = _clean_text(condition)
+    condition_number = _clean_text(condition_number)
+
+    if condition and condition_number:
+        return f"{condition} {condition_number}"
+
+    return condition or condition_number or "Not currently supplied."
+
+
+def safe_sort_int(value: Any, default: int = 999) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
 def simplify_scratchings_response(api_response: Dict[str, Any]) -> List[Dict[str, Any]]:
     scratchings: List[Dict[str, Any]] = []
 
@@ -128,18 +160,117 @@ def simplify_scratchings_response(api_response: Dict[str, Any]) -> List[Dict[str
     return scratchings
 
 
-def _clean_text(value: Any) -> str:
-    return str(value or "").strip()
+def simplify_results_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
+    payload = api_response.get("payLoad") or []
 
+    meetings: List[Dict[str, Any]] = []
+    all_race_results: List[Dict[str, Any]] = []
 
-def _format_track_condition(condition: str, condition_number: str) -> str:
-    condition = _clean_text(condition)
-    condition_number = _clean_text(condition_number)
+    for meeting in payload:
+        race_results: List[Dict[str, Any]] = []
 
-    if condition and condition_number:
-        return f"{condition} {condition_number}"
+        for race in meeting.get("raceResults") or []:
+            runners: List[Dict[str, Any]] = []
 
-    return condition or condition_number or "Not currently supplied."
+            for runner in race.get("runners") or []:
+                runners.append(
+                    {
+                        "position": runner.get("position"),
+                        "margin": runner.get("margin"),
+                        "tab_number": runner.get("tabNo"),
+                        "runner": _clean_text(runner.get("runner")),
+                        "runner_id": runner.get("runnerId"),
+                        "trainer": _clean_text(runner.get("trainer")),
+                        "trainer_id": runner.get("trainerId"),
+                        "jockey": _clean_text(runner.get("jockey")),
+                        "jockey_id": runner.get("jockeyId"),
+                        "barrier": runner.get("barrier"),
+                        "original_barrier": runner.get("originalBarrier"),
+                        "weight": runner.get("weight"),
+                        "weight_total": runner.get("weightTotal"),
+                        "weight_allocated": runner.get("weightAllocated"),
+                        "weight_adjustment": runner.get("weightAdjustment"),
+                        "jockey_claim": runner.get("jockeyClaim"),
+                        "price": runner.get("price"),
+                        "flucs": runner.get("flucs"),
+                        "in_run": runner.get("inRun"),
+                        "gear_changes": runner.get("gearChanges"),
+                        "stewards_reports": runner.get("stewardsReports"),
+                        "form_id": runner.get("formId"),
+                        "raw": runner,
+                    }
+                )
+
+            runners.sort(key=lambda item: safe_sort_int(item.get("position"), 999))
+
+            winner = next(
+                (runner for runner in runners if safe_sort_int(runner.get("position"), 999) == 1),
+                None,
+            )
+
+            placegetters = [
+                runner for runner in runners
+                if safe_sort_int(runner.get("position"), 999) in [1, 2, 3]
+            ]
+
+            simplified_race = {
+                "meeting_id": meeting.get("meetingId"),
+                "track": _clean_text(meeting.get("track")),
+                "track_id": meeting.get("trackId"),
+                "meeting_date": meeting.get("meetingDate"),
+                "race_id": race.get("raceId"),
+                "race_number": race.get("raceNumber"),
+                "distance_m": race.get("distance"),
+                "race_class": _clean_text(race.get("raceClass")),
+                "weight_type": _clean_text(race.get("weightType")),
+                "limit_weight": race.get("limitWeight"),
+                "track_condition": _clean_text(race.get("trackConditionLabel")),
+                "track_condition_code": race.get("trackCondition"),
+                "track_condition_number": race.get("trackConditionNumber"),
+                "official_race_time": race.get("officialRaceTime"),
+                "official_race_time_string": race.get("officialRaceTimeString"),
+                "sectional_distance": race.get("sectionalDistance"),
+                "official_sectional_time": race.get("officialSectionalTime"),
+                "wind_direction": race.get("windDirection"),
+                "wind_speed": race.get("windSpeed"),
+                "runner_count": len(runners),
+                "winner": winner,
+                "placegetters": placegetters,
+                "runners": runners,
+                "raw": race,
+            }
+
+            race_results.append(simplified_race)
+            all_race_results.append(simplified_race)
+
+        race_results.sort(key=lambda item: safe_sort_int(item.get("race_number"), 999))
+
+        meetings.append(
+            {
+                "meeting_id": meeting.get("meetingId"),
+                "track": _clean_text(meeting.get("track")),
+                "track_id": meeting.get("trackId"),
+                "meeting_date": meeting.get("meetingDate"),
+                "results_updated": meeting.get("resultsUpdated"),
+                "race_count": len(race_results),
+                "race_results": race_results,
+                "raw": meeting,
+            }
+        )
+
+    return {
+        "success": api_response.get("statusCode") == 200,
+        "provider": "Punting Form",
+        "source": "Punting Form API - Results",
+        "meeting_count": len(meetings),
+        "race_count": len(all_race_results),
+        "meetings": meetings,
+        "race_results": all_race_results,
+        "raw_status_code": api_response.get("statusCode"),
+        "raw_error": api_response.get("error"),
+        "time_stamp": api_response.get("timeStamp"),
+        "process_time": api_response.get("processTime"),
+    }
 
 
 def simplify_meetings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -178,13 +309,6 @@ def simplify_meetings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
         "raw_status_code": api_response.get("statusCode"),
         "raw_error": api_response.get("error"),
     }
-
-
-def safe_sort_int(value: Any, default: int = 999) -> int:
-    try:
-        return int(float(value))
-    except Exception:
-        return default
 
 
 def simplify_meeting_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -401,11 +525,9 @@ def simplify_ratings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
                 "is_reliable": bool(item.get("isReliable")),
                 "barrier": item.get("barrier"),
                 "track_condition": item.get("trackCondition"),
-
                 "pf_ai_score": item.get("pfaiScore"),
                 "pf_ai_price": item.get("pfaiPrice"),
                 "pf_ai_rank": item.get("pfaiRank"),
-
                 "neural_price": item.get("neuralPrice"),
                 "neural_price_rank": item.get("neuralPriceRank"),
                 "weight_class_rank": item.get("weightClassRank"),
@@ -413,11 +535,9 @@ def simplify_ratings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
                 "time_adjusted_weight_class_rank": item.get("timeAdjustedWeightClassRank"),
                 "time_adjusted_weight_class_price": item.get("timeAdjustedWeightClassPrice"),
                 "class_change": item.get("classChange"),
-
                 "predicted_settle_position": item.get("predictedSettlePostion"),
                 "average_historical_settle_position": item.get("averageHistoricalSettlePosition"),
                 "run_style": _clean_text(item.get("runStyle")),
-
                 "time_rank": item.get("timeRank"),
                 "time_price": item.get("timePrice"),
                 "early_time_rank": item.get("earlyTimeRank"),
@@ -428,7 +548,6 @@ def simplify_ratings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
                 "last_400_time_price": item.get("last400TimePrice"),
                 "last_200_time_rank": item.get("last200TimeRank"),
                 "last_200_time_price": item.get("last200TimePrice"),
-
                 "raw": item,
             }
         )
