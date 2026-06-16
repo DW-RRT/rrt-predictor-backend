@@ -15,8 +15,30 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.7.0"
-PREDICTION_TYPE = "RRT Predictor v2.7 - Punting Form Weighted Model v1.2"
+MODEL_VERSION = "2.8.0"
+PREDICTION_TYPE = "RRT Predictor v2.8 - Punting Form Weighted Model v1.3"
+
+SCORING_WEIGHTS = {
+    "recent_form_last10": 0.15,
+    "win_place": 0.08,
+    "track_record": 0.08,
+    "distance_record": 0.09,
+    "track_distance_record": 0.09,
+    "track_condition_record": 0.12,
+    "trainer_a2e": 0.10,
+    "jockey_a2e": 0.08,
+    "trainer_jockey_a2e_combo": 0.12,
+    "barrier": 0.04,
+    "weight_carried": 0.02,
+    "market_price": 0.03,
+}
+
+PF_AI_STRATEGY = {
+    "active": False,
+    "weight": 0.00,
+    "status": "Monitoring only",
+    "purpose": "PF AI values are merged and reported for comparison, but not used in RRT scoring.",
+}
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -291,18 +313,18 @@ def score_runner(
     market_score = score_price(runner.get("price_sp"))
 
     final_score = (
-        last10_score * 0.15
-        + win_place_score * 0.08
-        + track_score * 0.08
-        + distance_score * 0.09
-        + track_distance_score * 0.09
-        + condition_score * 0.12
-        + trainer_score * 0.10
-        + jockey_score * 0.08
-        + trainer_jockey_score * 0.12
-        + barrier_score * 0.04
-        + weight_score * 0.02
-        + market_score * 0.03
+        last10_score * SCORING_WEIGHTS["recent_form_last10"]
+        + win_place_score * SCORING_WEIGHTS["win_place"]
+        + track_score * SCORING_WEIGHTS["track_record"]
+        + distance_score * SCORING_WEIGHTS["distance_record"]
+        + track_distance_score * SCORING_WEIGHTS["track_distance_record"]
+        + condition_score * SCORING_WEIGHTS["track_condition_record"]
+        + trainer_score * SCORING_WEIGHTS["trainer_a2e"]
+        + jockey_score * SCORING_WEIGHTS["jockey_a2e"]
+        + trainer_jockey_score * SCORING_WEIGHTS["trainer_jockey_a2e_combo"]
+        + barrier_score * SCORING_WEIGHTS["barrier"]
+        + weight_score * SCORING_WEIGHTS["weight_carried"]
+        + market_score * SCORING_WEIGHTS["market_price"]
     )
 
     final_score = round(clamp(final_score), 1)
@@ -335,6 +357,7 @@ def score_runner(
         "price": price,
         "market_rank": None,
         "pf_ai": _rating_payload_from_runner(runner),
+        "pf_ai_strategy": PF_AI_STRATEGY,
         "score_breakdown": {
             "last10_form": round(last10_score, 1),
             "win_place": round(win_place_score, 1),
@@ -430,6 +453,7 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "reason": format_reason(runner, category=category),
         "score_breakdown": runner.get("score_breakdown"),
         "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
+        "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
     }
 
 
@@ -1141,6 +1165,8 @@ def predict_from_form_data(
             "ratings_merge": ratings_merge,
             "meeting_metadata_merge": meeting_metadata_merge,
             "scratchings_merge": scratchings_merge,
+            "scoring_weights": SCORING_WEIGHTS,
+            "pf_ai_strategy": PF_AI_STRATEGY,
         }
 
     top_4_win = all_ranked[:4]
@@ -1184,6 +1210,8 @@ def predict_from_form_data(
         "ratings_merge": ratings_merge,
         "meeting_metadata_merge": meeting_metadata_merge,
         "scratchings_merge": scratchings_merge,
+        "scoring_weights": SCORING_WEIGHTS,
+        "pf_ai_strategy": PF_AI_STRATEGY,
         "eligible_race_count": len(eligible_races),
         "excluded_barrier_trial_count": len(races) - len(eligible_races),
         "runner_count": len(all_ranked),
@@ -1209,7 +1237,7 @@ def predict_from_form_data(
                 else "Low"
             ),
             "scoring_model": (
-                "RRT Punting Form Model v1.2: last10 form, win/place percentage, track record, "
+                "RRT Punting Form Model v1.3: last10 form, win/place percentage, track record, "
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
                 "PF AI ratings are merged for comparison only and are not yet used in scoring. "
