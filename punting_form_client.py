@@ -67,6 +67,17 @@ def get_meeting_form(
     )
 
 
+def get_meeting(
+    meeting_id: int,
+) -> Dict[str, Any]:
+    return make_request(
+        "/v2/form/meeting",
+        {
+            "meetingId": meeting_id,
+        },
+    )
+
+
 def get_conditions() -> Dict[str, Any]:
     return make_request(
         "/v2/Updates/Conditions",
@@ -83,6 +94,38 @@ def get_meeting_ratings(
             "meetingId": meeting_id,
         },
     )
+
+
+def get_scratchings() -> Dict[str, Any]:
+    return make_request(
+        "/v2/Updates/Scratchings",
+        {},
+    )
+
+
+def simplify_scratchings_response(api_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    scratchings: List[Dict[str, Any]] = []
+
+    for item in api_response.get("payLoad") or []:
+        scratchings.append(
+            {
+                "meeting_id": str(item.get("meetingId") or "").strip(),
+                "race_id": str(item.get("raceId") or "").strip(),
+                "runner_id": str(item.get("runnerId") or "").strip(),
+                "meeting_date": item.get("meetingDate"),
+                "meeting_date_utc": item.get("meetingDateUTC"),
+                "track": _clean_text(item.get("track")),
+                "race_no": item.get("raceNo"),
+                "tab_no": item.get("tabNo"),
+                "time_stamp": item.get("timeStamp"),
+                "deduction": item.get("deduction"),
+                "country": item.get("country"),
+                "code": item.get("code"),
+                "raw": item,
+            }
+        )
+
+    return scratchings
 
 
 def _clean_text(value: Any) -> str:
@@ -134,6 +177,70 @@ def simplify_meetings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
         "meetings": meetings,
         "raw_status_code": api_response.get("statusCode"),
         "raw_error": api_response.get("error"),
+    }
+
+
+def safe_sort_int(value: Any, default: int = 999) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def simplify_meeting_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
+    payload = api_response.get("payLoad") or {}
+    track = payload.get("track") or {}
+
+    races: List[Dict[str, Any]] = []
+
+    for race in payload.get("races") or []:
+        races.append(
+            {
+                "race_id": str(race.get("raceId") or ""),
+                "race_number": race.get("number"),
+                "race_name": _clean_text(race.get("name")),
+                "provider_race_id": race.get("providerRaceId"),
+                "distance_m": race.get("distance"),
+                "age_restrictions": race.get("ageRestrictions"),
+                "jockey_restrictions": race.get("jockeyRestrictions"),
+                "weight_type": race.get("weightType"),
+                "limit_weight": race.get("limitWeight"),
+                "race_class": _clean_text(race.get("raceClass")),
+                "prize_money": race.get("prizeMoney"),
+                "start_time": race.get("startTime"),
+                "start_time_utc": race.get("startTimeUTC"),
+                "group": _clean_text(race.get("group")),
+                "bonus_scheme": race.get("bonusScheme"),
+                "description": _clean_text(race.get("description")),
+                "prize_money_breakdown": race.get("prizeMoneyBreakDown"),
+                "sex_restrictions": race.get("sexRestrictions"),
+                "runner_count": len(race.get("runners") or []),
+            }
+        )
+
+    races.sort(key=lambda item: safe_sort_int(item.get("race_number"), 999))
+
+    return {
+        "success": api_response.get("statusCode") == 200,
+        "provider": "Punting Form",
+        "source": "Punting Form API - Meeting",
+        "meeting_id": payload.get("meetingId"),
+        "meeting_date": payload.get("meetingDate"),
+        "track": {
+            "name": track.get("name"),
+            "track_id": track.get("trackId"),
+            "location": track.get("location"),
+            "state": track.get("state"),
+            "country": track.get("country"),
+            "abbrev": track.get("abbrev"),
+            "surface": track.get("surface"),
+        },
+        "race_count": len(races),
+        "races": races,
+        "raw_status_code": api_response.get("statusCode"),
+        "raw_error": api_response.get("error"),
+        "time_stamp": api_response.get("timeStamp"),
+        "process_time": api_response.get("processTime"),
     }
 
 
@@ -337,26 +444,3 @@ def simplify_ratings_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
         "time_stamp": api_response.get("timeStamp"),
         "process_time": api_response.get("processTime"),
     }
-
-
-if __name__ == "__main__":
-    response = get_meeting_form(
-        meeting_id=240228,
-        race_number=0,
-        runs=10,
-    )
-
-    result = simplify_form_response(response)
-
-    print(f"Success: {result['success']}")
-    print(f"Races: {result['race_count']}")
-    print(f"Runners: {result['runner_count']}")
-
-    for race in result["races"][:8]:
-        print()
-        print("Race Number:", race["race_number"])
-        print("Race ID:", race["race_id"])
-        print("Race Name:", race["race_name"])
-        print("Distance:", race["distance_m"])
-        print("Track Condition:", race["track_condition"])
-        print("Runner Count:", len(race["runners"]))
