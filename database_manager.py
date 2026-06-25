@@ -96,6 +96,28 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
         )
 
+        # Unique indexes added in Stage 2B.
+        execute_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_rrt_prediction_latest
+            ON rrt_prediction_snapshots (meeting_id, model_version);
+            """
+        )
+
+        execute_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_rrt_results_latest
+            ON rrt_results_snapshots (meeting_id);
+            """
+        )
+
+        execute_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_rrt_performance_latest
+            ON rrt_performance_snapshots (meeting_id, model_version);
+            """
+        )
+
         execute_sql(
             """
             INSERT INTO rrt_model_versions (version, description, active)
@@ -106,8 +128,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                SCHEMA_VERSION,
-                "RRT Predictor v2.9.0 PostgreSQL foundation. No adaptive weighting active yet.",
+                "2.9.2",
+                "RRT Predictor v2.9.2 PostgreSQL duplicate-safe persistence. No adaptive weighting active yet.",
                 True,
             ),
         )
@@ -116,13 +138,18 @@ def init_postgres_schema() -> Dict[str, Any]:
             "success": True,
             "provider": "PostgreSQL",
             "schema_version": SCHEMA_VERSION,
-            "message": "PostgreSQL schema initialised successfully.",
+            "message": "PostgreSQL schema initialised successfully with duplicate-safe indexes.",
             "tables": [
                 "rrt_model_versions",
                 "rrt_meetings",
                 "rrt_prediction_snapshots",
                 "rrt_results_snapshots",
                 "rrt_performance_snapshots",
+            ],
+            "indexes": [
+                "ux_rrt_prediction_latest",
+                "ux_rrt_results_latest",
+                "ux_rrt_performance_latest",
             ],
         }
 
@@ -151,11 +178,23 @@ def get_postgres_status() -> Dict[str, Any]:
         """
     )
 
+    indexes = fetch_all(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname LIKE 'ux_rrt_%'
+        ORDER BY indexname;
+        """
+    )
+
     return {
         **status,
         "schema_version": SCHEMA_VERSION,
         "rrt_tables": [row.get("table_name") for row in tables],
         "rrt_table_count": len(tables),
+        "rrt_unique_indexes": [row.get("indexname") for row in indexes],
+        "rrt_unique_index_count": len(indexes),
     }
 
 
@@ -165,6 +204,20 @@ def get_database_summary() -> Dict[str, Any]:
         prediction_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_prediction_snapshots;")
         results_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_results_snapshots;")
         performance_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_performance_snapshots;")
+
+        averages = fetch_one(
+            """
+            SELECT
+                ROUND(AVG(overall_accuracy), 2) AS avg_overall_accuracy,
+                ROUND(AVG(top_win_strike_rate), 2) AS avg_top_win_strike_rate,
+                ROUND(AVG(each_way_strike_rate), 2) AS avg_each_way_strike_rate,
+                ROUND(AVG(roughie_strike_rate), 2) AS avg_roughie_strike_rate,
+                ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
+                ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
+                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate
+            FROM rrt_performance_snapshots;
+            """
+        )
 
         latest_performance = fetch_all(
             """
@@ -176,10 +229,28 @@ def get_database_summary() -> Dict[str, Any]:
                 overall_accuracy,
                 top_win_strike_rate,
                 each_way_strike_rate,
+                roughie_strike_rate,
+                double_strike_rate,
+                quaddie_strike_rate,
                 pf_ai_top_win_strike_rate,
                 created_at
             FROM rrt_performance_snapshots
             ORDER BY created_at DESC
+            LIMIT 10;
+            """
+        )
+
+        best_tracks = fetch_all(
+            """
+            SELECT
+                track,
+                COUNT(*) AS meeting_count,
+                ROUND(AVG(overall_accuracy), 2) AS avg_overall_accuracy,
+                ROUND(AVG(top_win_strike_rate), 2) AS avg_top_win_strike_rate,
+                ROUND(AVG(each_way_strike_rate), 2) AS avg_each_way_strike_rate
+            FROM rrt_performance_snapshots
+            GROUP BY track
+            ORDER BY avg_overall_accuracy DESC
             LIMIT 10;
             """
         )
@@ -194,6 +265,8 @@ def get_database_summary() -> Dict[str, Any]:
                 "results_snapshots": int((results_count or {}).get("count") or 0),
                 "performance_snapshots": int((performance_count or {}).get("count") or 0),
             },
+            "averages": averages or {},
+            "best_tracks": best_tracks,
             "latest_performance": latest_performance,
         }
 
@@ -262,7 +335,20 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
                 runner_count,
                 prediction_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb);
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (meeting_id, model_version)
+            DO UPDATE SET
+                prediction_type = EXCLUDED.prediction_type,
+                provider = EXCLUDED.provider,
+                source = EXCLUDED.source,
+                track = EXCLUDED.track,
+                meeting_date = EXCLUDED.meeting_date,
+                track_condition = EXCLUDED.track_condition,
+                weather = EXCLUDED.weather,
+                eligible_race_count = EXCLUDED.eligible_race_count,
+                runner_count = EXCLUDED.runner_count,
+                prediction_json = EXCLUDED.prediction_json,
+                created_at = NOW();
             """,
             (
                 meeting_id,
@@ -283,8 +369,9 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
         return {
             "success": True,
             "provider": "PostgreSQL",
-            "message": "Prediction snapshot saved.",
+            "message": "Prediction snapshot saved or updated.",
             "meeting_id": meeting_id,
+            "duplicate_safe": True,
         }
 
     except Exception as error:
@@ -315,7 +402,14 @@ def save_results_snapshot(results_snapshot: Dict[str, Any]) -> Dict[str, Any]:
                 results_updated,
                 result_json
             )
-            VALUES (%s, %s, %s, %s, %s::jsonb);
+            VALUES (%s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (meeting_id)
+            DO UPDATE SET
+                track = EXCLUDED.track,
+                meeting_date = EXCLUDED.meeting_date,
+                results_updated = EXCLUDED.results_updated,
+                result_json = EXCLUDED.result_json,
+                created_at = NOW();
             """,
             (
                 meeting_id,
@@ -329,8 +423,9 @@ def save_results_snapshot(results_snapshot: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "success": True,
             "provider": "PostgreSQL",
-            "message": "Results snapshot saved.",
+            "message": "Results snapshot saved or updated.",
             "meeting_id": meeting_id,
+            "duplicate_safe": True,
         }
 
     except Exception as error:
@@ -371,7 +466,20 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
                 pf_ai_top_win_strike_rate,
                 performance_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb);
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (meeting_id, model_version)
+            DO UPDATE SET
+                track = EXCLUDED.track,
+                meeting_date = EXCLUDED.meeting_date,
+                overall_accuracy = EXCLUDED.overall_accuracy,
+                top_win_strike_rate = EXCLUDED.top_win_strike_rate,
+                each_way_strike_rate = EXCLUDED.each_way_strike_rate,
+                roughie_strike_rate = EXCLUDED.roughie_strike_rate,
+                double_strike_rate = EXCLUDED.double_strike_rate,
+                quaddie_strike_rate = EXCLUDED.quaddie_strike_rate,
+                pf_ai_top_win_strike_rate = EXCLUDED.pf_ai_top_win_strike_rate,
+                performance_json = EXCLUDED.performance_json,
+                created_at = NOW();
             """,
             (
                 meeting_id,
@@ -392,8 +500,9 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
         return {
             "success": True,
             "provider": "PostgreSQL",
-            "message": "Performance snapshot saved.",
+            "message": "Performance snapshot saved or updated.",
             "meeting_id": meeting_id,
+            "duplicate_safe": True,
         }
 
     except Exception as error:
