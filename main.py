@@ -46,9 +46,21 @@ from database_upload_routes import (
     upload_database_excel,
 )
 
+from database_manager import (
+    get_postgres_status,
+    init_postgres_schema,
+    get_database_summary,
+)
+
+APP_VERSION = "1.0.0"
+BACKEND_VERSION = "2.9.0"
+MODEL_VERSION = "2.8.1"
+DATABASE_SCHEMA_VERSION = "2.9.0"
+
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.8.1",
+    version=BACKEND_VERSION,
 )
 
 app.add_middleware(
@@ -733,11 +745,13 @@ def root():
     return {
         "app": "RRT Predictor Backend",
         "status": "running",
-        "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.8.1",
-        "app_version": "1.0.0",
-        "backend_version": "2.8.1",
-        "model_version": "2.8.1",
+        "source": "RRT Predictor Live Race Data + PostgreSQL Foundation",
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "stage": "v2.9.0 PostgreSQL Foundation",
     }
 
 
@@ -747,11 +761,77 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.8.1",
-        "app_version": "1.0.0",
-        "backend_version": "2.8.1",
-        "model_version": "2.8.1",
-        "cache_ttl_seconds": 300
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "stage": "v2.9.0 PostgreSQL Foundation",
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+    }
+
+# ---------------------------------------------------------------------
+# PostgreSQL Routes - RRT Predictor v2.9.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/postgres-status")
+def api_postgres_status():
+    return get_postgres_status()
+
+
+@app.get("/api/postgres-init")
+def api_postgres_init():
+    return init_postgres_schema()
+
+
+@app.get("/api/postgres-summary")
+def api_postgres_summary():
+    return get_database_summary()
+
+
+@app.get("/api/route-check")
+def api_route_check():
+    registered_routes = sorted(
+        [
+            route.path
+            for route in app.routes
+            if hasattr(route, "path")
+        ]
+    )
+
+    required_routes = [
+        "/health",
+        "/api/postgres-status",
+        "/api/postgres-init",
+        "/api/postgres-summary",
+        "/api/punting-form-meetings",
+        "/api/punting-form-predict",
+        "/api/punting-form-results",
+        "/api/punting-form-performance",
+    ]
+
+    return {
+        "success": True,
+        "app": "RRT Predictor Backend",
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "required_routes": {
+            route: route in registered_routes
+            for route in required_routes
+        },
+        "postgres_routes_available": all(
+            route in registered_routes
+            for route in [
+                "/api/postgres-status",
+                "/api/postgres-init",
+                "/api/postgres-summary",
+            ]
+        ),
+        "registered_route_count": len(registered_routes),
+        "registered_routes": registered_routes,
     }
 
 # ---------------------------------------------------------------------

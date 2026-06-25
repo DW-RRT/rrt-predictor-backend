@@ -4,3 +4,4 @@ requests
 python-multipart
 openpyxl
 beautifulsoup4
+psycopg2-binary
