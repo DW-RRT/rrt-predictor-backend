@@ -66,9 +66,13 @@ from performance_reports import (
     get_model_version_report,
 )
 
+from historical_importer import (
+    import_historical_performance_file,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.9.3",
+    version="2.9.4",
 )
 
 app.add_middleware(
@@ -754,9 +758,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.9.3",
+        "version": "2.9.4",
         "app_version": "1.0.0",
-        "backend_version": "2.9.3",
+        "backend_version": "2.9.4",
         "model_version": "2.8.1",
     }
 
@@ -767,9 +771,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.9.3",
+        "version": "2.9.4",
         "app_version": "1.0.0",
-        "backend_version": "2.9.3",
+        "backend_version": "2.9.4",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -778,53 +782,56 @@ def health():
 @app.get("/api/route-check")
 def api_route_check():
     registered_routes = sorted(
-        route.path
-        for route in app.routes
-        if hasattr(route, "path")
+        [
+            route.path
+            for route in app.routes
+            if hasattr(route, "path")
+        ]
     )
 
-    required_route_paths = [
-        "/health",
-        "/api/postgres-status",
-        "/api/postgres-init",
-        "/api/postgres-summary",
-        "/api/punting-form-meetings",
-        "/api/punting-form-predict",
-        "/api/punting-form-results",
-        "/api/punting-form-performance",
-        "/api/reports/overall",
-        "/api/reports/by-track",
-        "/api/reports/best-worst-tracks",
-        "/api/reports/rrt-vs-pf-ai",
-        "/api/reports/daily",
-        "/api/reports/by-model",
-    ]
-
     required_routes = {
-        route_path: route_path in registered_routes
-        for route_path in required_route_paths
+        "/health": True,
+        "/api/postgres-status": True,
+        "/api/postgres-init": True,
+        "/api/postgres-summary": True,
+        "/api/import-historical-performance": True,
+        "/api/punting-form-meetings": True,
+        "/api/punting-form-predict": True,
+        "/api/punting-form-results": True,
+        "/api/punting-form-performance": True,
+        "/api/reports/overall": True,
+        "/api/reports/by-track": True,
+        "/api/reports/best-worst-tracks": True,
+        "/api/reports/rrt-vs-pf-ai": True,
+        "/api/reports/daily": True,
+        "/api/reports/by-model": True,
+    }
+
+    route_availability = {
+        route: route in registered_routes
+        for route in required_routes
     }
 
     return {
-        "success": True,
+        "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.9.3",
+        "version": "2.9.4",
         "app_version": "1.0.0",
-        "backend_version": "2.9.3",
+        "backend_version": "2.9.4",
         "model_version": "2.8.1",
         "database_schema_version": "2.9.0",
-        "required_routes": required_routes,
+        "required_routes": route_availability,
         "postgres_routes_available": all(
-            required_routes.get(route_path)
-            for route_path in [
+            route_availability.get(route)
+            for route in [
                 "/api/postgres-status",
                 "/api/postgres-init",
                 "/api/postgres-summary",
             ]
         ),
         "report_routes_available": all(
-            required_routes.get(route_path)
-            for route_path in [
+            route_availability.get(route)
+            for route in [
                 "/api/reports/overall",
                 "/api/reports/by-track",
                 "/api/reports/best-worst-tracks",
@@ -833,6 +840,7 @@ def api_route_check():
                 "/api/reports/by-model",
             ]
         ),
+        "historical_import_available": route_availability.get("/api/import-historical-performance"),
         "registered_route_count": len(registered_routes),
         "registered_routes": registered_routes,
     }
@@ -892,8 +900,32 @@ def api_postgres_clean_duplicates():
             "error": str(error),
         }
 
+
+@app.post("/api/import-historical-performance")
+async def api_import_historical_performance(
+    uploaded_file: UploadFile = File(...),
+    dry_run: bool = Query(False),
+):
+    try:
+        file_bytes = await uploaded_file.read()
+
+        return import_historical_performance_file(
+            file_bytes=file_bytes,
+            filename=uploaded_file.filename or "historical_performance.txt",
+            dry_run=dry_run,
+        )
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "RRT Predictor",
+            "importer_version": "2.9.4",
+            "message": "Historical performance import failed.",
+            "error": str(error),
+        }
+
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.9.3
+# Performance Reporting Routes - RRT Predictor v2.9.4
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1636,7 +1668,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
+        "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1752,7 +1784,7 @@ def api_punting_form_predict(
                 "storage": "in_memory + PostgreSQL",
                 "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
                 "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.9.3 PostgreSQL-backed accuracy tracking.",
+                "note": "Prediction snapshot stored for v2.9.1 PostgreSQL-backed accuracy tracking.",
             }
 
         return prediction_response
@@ -1844,7 +1876,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
+                "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1883,7 +1915,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
+            "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
             "meeting_id": meeting_id,
             "error": str(error),
         }
