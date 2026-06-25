@@ -50,14 +50,17 @@ from database_manager import (
     get_postgres_status,
     init_postgres_schema,
     get_database_summary,
-    save_prediction_snapshot as save_prediction_snapshot_to_postgres,
-    save_results_snapshot as save_results_snapshot_to_postgres,
-    save_performance_snapshot as save_performance_snapshot_to_postgres,
 )
+
+APP_VERSION = "1.0.0"
+BACKEND_VERSION = "2.9.0"
+MODEL_VERSION = "2.8.1"
+DATABASE_SCHEMA_VERSION = "2.9.0"
+
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.9.1",
+    version=BACKEND_VERSION,
 )
 
 app.add_middleware(
@@ -742,11 +745,13 @@ def root():
     return {
         "app": "RRT Predictor Backend",
         "status": "running",
-        "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.9.1",
-        "app_version": "1.0.0",
-        "backend_version": "2.9.1",
-        "model_version": "2.8.1",
+        "source": "RRT Predictor Live Race Data + PostgreSQL Foundation",
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "stage": "v2.9.0 PostgreSQL Foundation",
     }
 
 
@@ -756,11 +761,13 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.9.1",
-        "app_version": "1.0.0",
-        "backend_version": "2.9.1",
-        "model_version": "2.8.1",
-        "cache_ttl_seconds": 300
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "stage": "v2.9.0 PostgreSQL Foundation",
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
     }
 
 # ---------------------------------------------------------------------
@@ -780,6 +787,52 @@ def api_postgres_init():
 @app.get("/api/postgres-summary")
 def api_postgres_summary():
     return get_database_summary()
+
+
+@app.get("/api/route-check")
+def api_route_check():
+    registered_routes = sorted(
+        [
+            route.path
+            for route in app.routes
+            if hasattr(route, "path")
+        ]
+    )
+
+    required_routes = [
+        "/health",
+        "/api/postgres-status",
+        "/api/postgres-init",
+        "/api/postgres-summary",
+        "/api/punting-form-meetings",
+        "/api/punting-form-predict",
+        "/api/punting-form-results",
+        "/api/punting-form-performance",
+    ]
+
+    return {
+        "success": True,
+        "app": "RRT Predictor Backend",
+        "version": BACKEND_VERSION,
+        "app_version": APP_VERSION,
+        "backend_version": BACKEND_VERSION,
+        "model_version": MODEL_VERSION,
+        "database_schema_version": DATABASE_SCHEMA_VERSION,
+        "required_routes": {
+            route: route in registered_routes
+            for route in required_routes
+        },
+        "postgres_routes_available": all(
+            route in registered_routes
+            for route in [
+                "/api/postgres-status",
+                "/api/postgres-init",
+                "/api/postgres-summary",
+            ]
+        ),
+        "registered_route_count": len(registered_routes),
+        "registered_routes": registered_routes,
+    }
 
 # ---------------------------------------------------------------------
 # Stored Excel Database Routes
@@ -1245,10 +1298,6 @@ def _save_prediction_snapshot(
     }
 
     PREDICTION_HISTORY[str(meeting_id)] = snapshot
-
-    postgres_save_result = save_prediction_snapshot_to_postgres(snapshot)
-    snapshot["postgres_history"] = postgres_save_result
-
     return snapshot
 
 
@@ -1491,7 +1540,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.9.1 PostgreSQL Accuracy Tracking",
+        "source": "RRT Predictor v2.8.1 Accuracy Tracking",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1604,10 +1653,8 @@ def api_punting_form_predict(
             prediction_response["prediction_history"] = {
                 "saved": True,
                 "saved_at": snapshot.get("saved_at"),
-                "storage": "in_memory + PostgreSQL",
-                "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
-                "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.9.1 PostgreSQL-backed accuracy tracking.",
+                "storage": "in_memory",
+                "note": "Prediction snapshot stored for v2.8.1 Results API accuracy tracking.",
             }
 
         return prediction_response
@@ -1627,14 +1674,7 @@ def api_punting_form_results(
 ):
     try:
         raw_results = _get_punting_form_results(meeting_id=meeting_id)
-        simplified_results = _simplify_punting_form_results(raw_results)
-
-        if simplified_results.get("success"):
-            simplified_results["postgres_history"] = save_results_snapshot_to_postgres(
-                simplified_results
-            )
-
-        return simplified_results
+        return _simplify_punting_form_results(raw_results)
 
     except Exception as error:
         return {
@@ -1699,7 +1739,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.9.1 PostgreSQL Accuracy Tracking",
+                "source": "RRT Predictor v2.8.1 Accuracy Tracking",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1717,28 +1757,16 @@ def api_punting_form_performance(
                 "results": simplified_results,
             }
 
-        results_postgres_save = save_results_snapshot_to_postgres(simplified_results)
-
-        performance_response = _compare_prediction_to_results(
+        return _compare_prediction_to_results(
             prediction_snapshot=prediction_snapshot,
             results=simplified_results,
         )
-
-        if performance_response.get("success"):
-            performance_response["postgres_history"] = {
-                "results_saved": results_postgres_save,
-                "performance_saved": save_performance_snapshot_to_postgres(
-                    performance_response
-                ),
-            }
-
-        return performance_response
 
     except Exception as error:
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.9.1 PostgreSQL Accuracy Tracking",
+            "source": "RRT Predictor v2.8.1 Accuracy Tracking",
             "meeting_id": meeting_id,
             "error": str(error),
         }
