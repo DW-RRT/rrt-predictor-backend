@@ -55,6 +55,8 @@ from database_manager import (
     save_performance_snapshot as save_performance_snapshot_to_postgres,
 )
 
+from database import execute_sql
+
 app = FastAPI(
     title="RRT Predictor Backend",
     version="2.9.2",
@@ -780,6 +782,43 @@ def api_postgres_init():
 @app.get("/api/postgres-summary")
 def api_postgres_summary():
     return get_database_summary()
+
+@app.get("/api/postgres-clean-duplicates")
+def api_postgres_clean_duplicates():
+    try:
+        execute_sql("""
+            DELETE FROM rrt_results_snapshots a
+            USING rrt_results_snapshots b
+            WHERE a.id < b.id
+              AND a.meeting_id = b.meeting_id;
+        """)
+
+        execute_sql("""
+            DELETE FROM rrt_performance_snapshots a
+            USING rrt_performance_snapshots b
+            WHERE a.id < b.id
+              AND a.meeting_id = b.meeting_id
+              AND a.model_version = b.model_version;
+        """)
+
+        execute_sql("""
+            DELETE FROM rrt_prediction_snapshots a
+            USING rrt_prediction_snapshots b
+            WHERE a.id < b.id
+              AND a.meeting_id = b.meeting_id
+              AND a.model_version = b.model_version;
+        """)
+
+        return {
+            "success": True,
+            "message": "Duplicate PostgreSQL snapshots cleaned. You can now run /api/postgres-init again."
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "error": str(error),
+        }
 
 # ---------------------------------------------------------------------
 # Stored Excel Database Routes
