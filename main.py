@@ -57,9 +57,18 @@ from database_manager import (
 
 from database import execute_sql
 
+from performance_reports import (
+    get_overall_performance_report,
+    get_track_performance_report,
+    get_best_worst_tracks_report,
+    get_rrt_vs_pf_ai_report,
+    get_daily_performance_report,
+    get_model_version_report,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.9.2",
+    version="2.9.3",
 )
 
 app.add_middleware(
@@ -745,9 +754,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.9.2",
+        "version": "2.9.3",
         "app_version": "1.0.0",
-        "backend_version": "2.9.2",
+        "backend_version": "2.9.3",
         "model_version": "2.8.1",
     }
 
@@ -758,11 +767,74 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.9.2",
+        "version": "2.9.3",
         "app_version": "1.0.0",
-        "backend_version": "2.9.2",
+        "backend_version": "2.9.3",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
+    }
+
+
+@app.get("/api/route-check")
+def api_route_check():
+    registered_routes = sorted(
+        route.path
+        for route in app.routes
+        if hasattr(route, "path")
+    )
+
+    required_route_paths = [
+        "/health",
+        "/api/postgres-status",
+        "/api/postgres-init",
+        "/api/postgres-summary",
+        "/api/punting-form-meetings",
+        "/api/punting-form-predict",
+        "/api/punting-form-results",
+        "/api/punting-form-performance",
+        "/api/reports/overall",
+        "/api/reports/by-track",
+        "/api/reports/best-worst-tracks",
+        "/api/reports/rrt-vs-pf-ai",
+        "/api/reports/daily",
+        "/api/reports/by-model",
+    ]
+
+    required_routes = {
+        route_path: route_path in registered_routes
+        for route_path in required_route_paths
+    }
+
+    return {
+        "success": True,
+        "app": "RRT Predictor Backend",
+        "version": "2.9.3",
+        "app_version": "1.0.0",
+        "backend_version": "2.9.3",
+        "model_version": "2.8.1",
+        "database_schema_version": "2.9.0",
+        "required_routes": required_routes,
+        "postgres_routes_available": all(
+            required_routes.get(route_path)
+            for route_path in [
+                "/api/postgres-status",
+                "/api/postgres-init",
+                "/api/postgres-summary",
+            ]
+        ),
+        "report_routes_available": all(
+            required_routes.get(route_path)
+            for route_path in [
+                "/api/reports/overall",
+                "/api/reports/by-track",
+                "/api/reports/best-worst-tracks",
+                "/api/reports/rrt-vs-pf-ai",
+                "/api/reports/daily",
+                "/api/reports/by-model",
+            ]
+        ),
+        "registered_route_count": len(registered_routes),
+        "registered_routes": registered_routes,
     }
 
 # ---------------------------------------------------------------------
@@ -819,6 +891,40 @@ def api_postgres_clean_duplicates():
             "success": False,
             "error": str(error),
         }
+
+# ---------------------------------------------------------------------
+# Performance Reporting Routes - RRT Predictor v2.9.3
+# ---------------------------------------------------------------------
+
+@app.get("/api/reports/overall")
+def api_report_overall():
+    return get_overall_performance_report()
+
+
+@app.get("/api/reports/by-track")
+def api_report_by_track():
+    return get_track_performance_report()
+
+
+@app.get("/api/reports/best-worst-tracks")
+def api_report_best_worst_tracks(limit: int = Query(10)):
+    return get_best_worst_tracks_report(limit=limit)
+
+
+@app.get("/api/reports/rrt-vs-pf-ai")
+def api_report_rrt_vs_pf_ai():
+    return get_rrt_vs_pf_ai_report()
+
+
+@app.get("/api/reports/daily")
+def api_report_daily():
+    return get_daily_performance_report()
+
+
+@app.get("/api/reports/by-model")
+def api_report_by_model():
+    return get_model_version_report()
+
 
 # ---------------------------------------------------------------------
 # Stored Excel Database Routes
@@ -1530,7 +1636,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.9.2 Duplicate-Safe PostgreSQL Accuracy Tracking",
+        "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1646,7 +1752,7 @@ def api_punting_form_predict(
                 "storage": "in_memory + PostgreSQL",
                 "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
                 "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.9.1 PostgreSQL-backed accuracy tracking.",
+                "note": "Prediction snapshot stored for v2.9.3 PostgreSQL-backed accuracy tracking.",
             }
 
         return prediction_response
@@ -1738,7 +1844,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.9.2 Duplicate-Safe PostgreSQL Accuracy Tracking",
+                "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1777,7 +1883,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.9.2 Duplicate-Safe PostgreSQL Accuracy Tracking",
+            "source": "RRT Predictor v2.9.3 Duplicate-Safe PostgreSQL Accuracy Tracking",
             "meeting_id": meeting_id,
             "error": str(error),
         }
