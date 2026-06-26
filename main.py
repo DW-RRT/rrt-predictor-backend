@@ -64,6 +64,11 @@ from performance_reports import (
     get_rrt_vs_pf_ai_report,
     get_daily_performance_report,
     get_model_version_report,
+    get_analytics_summary,
+    get_analytics_by_track,
+    get_analytics_by_date,
+    get_analytics_rrt_vs_pf_ai,
+    get_analytics_learning_readiness,
 )
 
 from historical_importer import (
@@ -72,7 +77,7 @@ from historical_importer import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.9.4",
+    version="2.10.0",
 )
 
 app.add_middleware(
@@ -758,9 +763,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.9.4",
+        "version": "2.10.0",
         "app_version": "1.0.0",
-        "backend_version": "2.9.4",
+        "backend_version": "2.10.0",
         "model_version": "2.8.1",
     }
 
@@ -771,9 +776,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.9.4",
+        "version": "2.10.0",
         "app_version": "1.0.0",
-        "backend_version": "2.9.4",
+        "backend_version": "2.10.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -805,6 +810,11 @@ def api_route_check():
         "/api/reports/rrt-vs-pf-ai": True,
         "/api/reports/daily": True,
         "/api/reports/by-model": True,
+        "/api/analytics/summary": True,
+        "/api/analytics/by-track": True,
+        "/api/analytics/by-date": True,
+        "/api/analytics/rrt-vs-pf-ai": True,
+        "/api/analytics/learning-readiness": True,
     }
 
     route_availability = {
@@ -815,9 +825,9 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.9.4",
+        "version": "2.10.0",
         "app_version": "1.0.0",
-        "backend_version": "2.9.4",
+        "backend_version": "2.10.0",
         "model_version": "2.8.1",
         "database_schema_version": "2.9.0",
         "required_routes": route_availability,
@@ -838,6 +848,16 @@ def api_route_check():
                 "/api/reports/rrt-vs-pf-ai",
                 "/api/reports/daily",
                 "/api/reports/by-model",
+            ]
+        ),
+        "analytics_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/analytics/summary",
+                "/api/analytics/by-track",
+                "/api/analytics/by-date",
+                "/api/analytics/rrt-vs-pf-ai",
+                "/api/analytics/learning-readiness",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -919,13 +939,13 @@ async def api_import_historical_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "importer_version": "2.9.4",
+            "importer_version": "2.9.7",
             "message": "Historical performance import failed.",
             "error": str(error),
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.9.4
+# Performance Reporting Routes - RRT Predictor v2.10.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -956,6 +976,45 @@ def api_report_daily():
 @app.get("/api/reports/by-model")
 def api_report_by_model():
     return get_model_version_report()
+
+
+# ---------------------------------------------------------------------
+# Performance Analytics Routes - RRT Predictor v2.10.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/analytics/summary")
+def api_analytics_summary():
+    return get_analytics_summary()
+
+
+@app.get("/api/analytics/by-track")
+def api_analytics_by_track(
+    min_meetings: int = Query(1),
+    limit: int = Query(100),
+):
+    return get_analytics_by_track(
+        min_meetings=min_meetings,
+        limit=limit,
+    )
+
+
+@app.get("/api/analytics/by-date")
+def api_analytics_by_date(
+    limit: int = Query(60),
+):
+    return get_analytics_by_date(limit=limit)
+
+
+@app.get("/api/analytics/rrt-vs-pf-ai")
+def api_analytics_rrt_vs_pf_ai(
+    limit: int = Query(100),
+):
+    return get_analytics_rrt_vs_pf_ai(limit=limit)
+
+
+@app.get("/api/analytics/learning-readiness")
+def api_analytics_learning_readiness():
+    return get_analytics_learning_readiness()
 
 
 # ---------------------------------------------------------------------
@@ -1275,7 +1334,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.8.1)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.10.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1668,7 +1727,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
+        "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1784,7 +1843,7 @@ def api_punting_form_predict(
                 "storage": "in_memory + PostgreSQL",
                 "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
                 "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.9.1 PostgreSQL-backed accuracy tracking.",
+                "note": "Prediction snapshot stored for v2.10.0 PostgreSQL-backed analytics and accuracy tracking.",
             }
 
         return prediction_response
@@ -1876,7 +1935,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
+                "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1915,7 +1974,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.9.4 Duplicate-Safe PostgreSQL Accuracy Tracking",
+            "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
             "meeting_id": meeting_id,
             "error": str(error),
         }
