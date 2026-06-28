@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.12.0"
+SCHEMA_VERSION = "2.12.1"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -615,12 +615,74 @@ def _runner_factor_key(runner: Dict[str, Any]) -> str:
     return f"race:{race_id or race_number}|tab:{tab_number}|name:{runner_name}"
 
 
+
+def _extract_runner_factor_rows_from_prediction_snapshot(
+    prediction_snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    factor_capture = prediction_snapshot.get("factor_capture") or {}
+    direct_rows = factor_capture.get("runners") or []
+
+    if direct_rows:
+        return direct_rows
+
+    predictions = prediction_snapshot.get("predictions") or {}
+    collected: Dict[str, Dict[str, Any]] = {}
+
+    def add_runner(runner: Any) -> None:
+        if not isinstance(runner, dict):
+            return
+
+        has_factor_data = bool(
+            runner.get("score_breakdown")
+            or runner.get("weighted_breakdown")
+            or runner.get("factor_capture")
+        )
+
+        if not has_factor_data:
+            return
+
+        runner_key = runner.get("runner_key") or _runner_factor_key(runner)
+
+        collected[runner_key] = {
+            **runner,
+            "runner_key": runner_key,
+        }
+
+    for category_key in [
+        "top_4_win_bets",
+        "top_4_each_way_bets",
+        "top_4_roughies",
+        "top_3_win_bets",
+        "top_3_each_way_bets",
+        "top_3_roughies",
+    ]:
+        for runner in predictions.get(category_key) or []:
+            add_runner(runner)
+
+    for multi_key in ["best_double", "best_quaddie"]:
+        multi = predictions.get(multi_key) or {}
+
+        for leg in multi.get("legs") or []:
+            for runner in leg.get("selections") or []:
+                add_runner(
+                    {
+                        **runner,
+                        "race_id": runner.get("race_id") or leg.get("race_id"),
+                        "race_number": runner.get("race_number") or leg.get("race_number"),
+                        "race_name": runner.get("race_name") or leg.get("race_name"),
+                        "race_title": runner.get("race_title") or leg.get("race_title"),
+                        "distance_m": runner.get("distance_m") or leg.get("distance_m"),
+                    }
+                )
+
+    return list(collected.values())
+
+
 def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     try:
         meeting_id = prediction_snapshot.get("meeting_id")
         model_version = prediction_snapshot.get("model_version")
-        factor_capture = prediction_snapshot.get("factor_capture") or {}
-        runners = factor_capture.get("runners") or []
+        runners = _extract_runner_factor_rows_from_prediction_snapshot(prediction_snapshot)
 
         if not meeting_id:
             return {
@@ -633,7 +695,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
             return {
                 "success": True,
                 "provider": "PostgreSQL",
-                "message": "No runner factor rows available to save.",
+                "message": "No runner factor rows available to save after checking factor_capture and prediction selections.",
                 "meeting_id": meeting_id,
                 "saved_count": 0,
             }
