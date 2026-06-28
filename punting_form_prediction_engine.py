@@ -15,8 +15,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.8.0"
-PREDICTION_TYPE = "RRT Predictor v2.8 - Punting Form Weighted Model v1.3"
+MODEL_VERSION = "2.8.1"
+PREDICTION_TYPE = "RRT Predictor v2.12.0 - Punting Form Weighted Model v1.3 + Factor Capture"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -279,6 +279,78 @@ def _rating_payload_from_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _runner_factor_key(
+    runner: Dict[str, Any],
+    race: Optional[Dict[str, Any]] = None,
+) -> str:
+    race = race or {}
+    race_id = str(race.get("race_id") or runner.get("race_id") or "").strip()
+    race_number = str(race.get("race_number") or runner.get("race_number") or "").strip()
+    runner_id = str(runner.get("runner_id") or "").strip()
+    tab_number = str(runner.get("tab_number") or runner.get("number") or "").strip()
+    runner_name = normalise_text(runner.get("horse_name") or runner.get("runner"))
+
+    if runner_id and runner_id != "0":
+        return f"runner_id:{runner_id}"
+
+    return f"race:{race_id or race_number}|tab:{tab_number}|name:{runner_name}"
+
+
+def build_weighted_breakdown(score_breakdown: Dict[str, Any]) -> Dict[str, float]:
+    weighted = {
+        "last10_form": safe_float(score_breakdown.get("last10_form")) * SCORING_WEIGHTS["recent_form_last10"],
+        "win_place": safe_float(score_breakdown.get("win_place")) * SCORING_WEIGHTS["win_place"],
+        "track_record": safe_float(score_breakdown.get("track_record")) * SCORING_WEIGHTS["track_record"],
+        "distance_record": safe_float(score_breakdown.get("distance_record")) * SCORING_WEIGHTS["distance_record"],
+        "track_distance_record": safe_float(score_breakdown.get("track_distance_record")) * SCORING_WEIGHTS["track_distance_record"],
+        "track_condition_record": safe_float(score_breakdown.get("track_condition_record")) * SCORING_WEIGHTS["track_condition_record"],
+        "trainer": safe_float(score_breakdown.get("trainer")) * SCORING_WEIGHTS["trainer_a2e"],
+        "jockey": safe_float(score_breakdown.get("jockey")) * SCORING_WEIGHTS["jockey_a2e"],
+        "trainer_jockey": safe_float(score_breakdown.get("trainer_jockey")) * SCORING_WEIGHTS["trainer_jockey_a2e_combo"],
+        "barrier": safe_float(score_breakdown.get("barrier")) * SCORING_WEIGHTS["barrier"],
+        "weight": safe_float(score_breakdown.get("weight")) * SCORING_WEIGHTS["weight_carried"],
+        "market_price": safe_float(score_breakdown.get("market_price")) * SCORING_WEIGHTS["market_price"],
+    }
+
+    return {
+        key: round(value, 4)
+        for key, value in weighted.items()
+    }
+
+
+def build_factor_capture_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "runner_key": runner.get("runner_key"),
+        "race_id": runner.get("race_id"),
+        "race_number": runner.get("race_number"),
+        "race_name": runner.get("race_name"),
+        "race_title": runner.get("race_title"),
+        "distance_m": runner.get("distance_m"),
+        "track_condition": runner.get("track_condition"),
+        "runner_id": runner.get("runner_id"),
+        "tab_number": runner.get("tab_number"),
+        "number": runner.get("tab_number"),
+        "runner": runner.get("horse_name"),
+        "horse_name": runner.get("horse_name"),
+        "trainer": runner.get("trainer"),
+        "jockey": runner.get("jockey"),
+        "barrier": runner.get("barrier"),
+        "weight": runner.get("weight_kg"),
+        "last10": runner.get("last10"),
+        "price": runner.get("price"),
+        "market_rank": runner.get("market_rank"),
+        "score": runner.get("score"),
+        "confidence": runner.get("confidence"),
+        "score_breakdown": runner.get("score_breakdown"),
+        "weighted_breakdown": runner.get("weighted_breakdown"),
+        "scoring_weights": SCORING_WEIGHTS,
+        "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
+        "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
+    }
+
+
+
+
 def score_runner(
     runner: Dict[str, Any],
     race: Dict[str, Any],
@@ -343,8 +415,26 @@ def score_runner(
 
     price = safe_float(runner.get("price_sp"), 0)
 
+    score_breakdown = {
+        "last10_form": round(last10_score, 1),
+        "win_place": round(win_place_score, 1),
+        "track_record": round(track_score, 1),
+        "distance_record": round(distance_score, 1),
+        "track_distance_record": round(track_distance_score, 1),
+        "track_condition_record": round(condition_score, 1),
+        "trainer": round(trainer_score, 1),
+        "jockey": round(jockey_score, 1),
+        "trainer_jockey": round(trainer_jockey_score, 1),
+        "barrier": round(barrier_score, 1),
+        "weight": round(weight_score, 1),
+        "market_price": round(market_score, 1),
+    }
+
+    weighted_breakdown = build_weighted_breakdown(score_breakdown)
+
     return {
         **runner,
+        "runner_key": _runner_factor_key(runner, race),
         "race_id": race.get("race_id"),
         "race_name": race.get("race_name"),
         "race_number": race.get("race_number"),
@@ -358,19 +448,15 @@ def score_runner(
         "market_rank": None,
         "pf_ai": _rating_payload_from_runner(runner),
         "pf_ai_strategy": PF_AI_STRATEGY,
-        "score_breakdown": {
-            "last10_form": round(last10_score, 1),
-            "win_place": round(win_place_score, 1),
-            "track_record": round(track_score, 1),
-            "distance_record": round(distance_score, 1),
-            "track_distance_record": round(track_distance_score, 1),
-            "track_condition_record": round(condition_score, 1),
-            "trainer": round(trainer_score, 1),
-            "jockey": round(jockey_score, 1),
-            "trainer_jockey": round(trainer_jockey_score, 1),
-            "barrier": round(barrier_score, 1),
-            "weight": round(weight_score, 1),
-            "market_price": round(market_score, 1),
+        "score_breakdown": score_breakdown,
+        "weighted_breakdown": weighted_breakdown,
+        "factor_capture": {
+            "runner_key": _runner_factor_key(runner, race),
+            "raw_component_scores": score_breakdown,
+            "weighted_component_scores": weighted_breakdown,
+            "final_score": final_score,
+            "confidence": confidence,
+            "scoring_weights": SCORING_WEIGHTS,
         },
     }
 
@@ -452,6 +538,11 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "distance_m": runner.get("distance_m"),
         "reason": format_reason(runner, category=category),
         "score_breakdown": runner.get("score_breakdown"),
+        "weighted_breakdown": runner.get("weighted_breakdown"),
+        "factor_capture": runner.get("factor_capture"),
+        "runner_key": runner.get("runner_key"),
+        "runner_id": runner.get("runner_id"),
+        "tab_number": runner.get("tab_number"),
         "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
         "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
     }
@@ -1167,6 +1258,12 @@ def predict_from_form_data(
             "scratchings_merge": scratchings_merge,
             "scoring_weights": SCORING_WEIGHTS,
             "pf_ai_strategy": PF_AI_STRATEGY,
+            "factor_capture": {
+                "version": "2.12.0",
+                "status": "not_available",
+                "runner_count": 0,
+                "runners": [],
+            },
         }
 
     top_4_win = all_ranked[:4]

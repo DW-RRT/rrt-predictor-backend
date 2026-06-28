@@ -54,6 +54,9 @@ from database_manager import (
     save_prediction_snapshot as save_prediction_snapshot_to_postgres,
     save_results_snapshot as save_results_snapshot_to_postgres,
     save_performance_snapshot as save_performance_snapshot_to_postgres,
+    save_runner_factor_snapshots as save_runner_factor_snapshots_to_postgres,
+    update_runner_factor_results_from_results,
+    get_factor_capture_summary,
 )
 
 from database import execute_sql
@@ -81,7 +84,7 @@ from historical_importer import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.11.0",
+    version="2.12.0",
 )
 
 app.add_middleware(
@@ -767,9 +770,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.11.0",
+        "version": "2.12.0",
         "app_version": "1.0.0",
-        "backend_version": "2.11.0",
+        "backend_version": "2.12.0",
         "model_version": "2.8.1",
     }
 
@@ -780,9 +783,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.11.0",
+        "version": "2.12.0",
         "app_version": "1.0.0",
-        "backend_version": "2.11.0",
+        "backend_version": "2.12.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -822,6 +825,7 @@ def api_route_check():
         "/api/learning/recommendations": True,
         "/api/learning/report-html": True,
         "/api/learning/report-pdf": True,
+        "/api/factor-capture/summary": True,
     }
 
     route_availability = {
@@ -832,11 +836,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.11.0",
+        "version": "2.12.0",
         "app_version": "1.0.0",
-        "backend_version": "2.11.0",
+        "backend_version": "2.12.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.9.0",
+        "database_schema_version": "2.12.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -875,6 +879,7 @@ def api_route_check():
                 "/api/learning/report-pdf",
             ]
         ),
+        "factor_capture_routes_available": route_availability.get("/api/factor-capture/summary"),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
         "registered_route_count": len(registered_routes),
         "registered_routes": registered_routes,
@@ -960,7 +965,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.11.0
+# Performance Reporting Routes - RRT Predictor v2.12.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -994,7 +999,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.11.0
+# Performance Analytics Routes - RRT Predictor v2.12.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1033,7 +1038,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.11.0
+# Learning Centre Routes - RRT Predictor v2.12.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1054,9 +1059,18 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_11_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_12_0.pdf"
         },
     )
+
+
+# ---------------------------------------------------------------------
+# Factor Capture Routes - RRT Predictor v2.12.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/factor-capture/summary")
+def api_factor_capture_summary():
+    return get_factor_capture_summary()
 
 
 # ---------------------------------------------------------------------
@@ -1376,7 +1390,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.11.0)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.12.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1520,12 +1534,16 @@ def _save_prediction_snapshot(
         "runner_count": prediction_response.get("runner_count"),
         "prediction_summary": prediction_response.get("prediction_summary"),
         "predictions": prediction_response.get("predictions") or {},
+        "factor_capture": prediction_response.get("factor_capture") or {},
     }
 
     PREDICTION_HISTORY[str(meeting_id)] = snapshot
 
     postgres_save_result = save_prediction_snapshot_to_postgres(snapshot)
+    factor_save_result = save_runner_factor_snapshots_to_postgres(snapshot)
+
     snapshot["postgres_history"] = postgres_save_result
+    snapshot["factor_capture_history"] = factor_save_result
 
     return snapshot
 
@@ -1769,7 +1787,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
+        "source": "RRT Predictor v2.12.0 Factor Capture + Learning Centre",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1885,7 +1903,10 @@ def api_punting_form_predict(
                 "storage": "in_memory + PostgreSQL",
                 "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
                 "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.11.0 PostgreSQL-backed learning, analytics, and accuracy tracking.",
+                "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
+                "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
+                "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.12.0 PostgreSQL-backed learning and accuracy tracking.",
             }
 
         return prediction_response
@@ -1977,7 +1998,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
+                "source": "RRT Predictor v2.12.0 Factor Capture + Learning Centre",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1996,6 +2017,10 @@ def api_punting_form_performance(
             }
 
         results_postgres_save = save_results_snapshot_to_postgres(simplified_results)
+        factor_result_update = update_runner_factor_results_from_results(
+            prediction_snapshot=prediction_snapshot,
+            results_snapshot=simplified_results,
+        )
 
         performance_response = _compare_prediction_to_results(
             prediction_snapshot=prediction_snapshot,
@@ -2005,6 +2030,7 @@ def api_punting_form_performance(
         if performance_response.get("success"):
             performance_response["postgres_history"] = {
                 "results_saved": results_postgres_save,
+                "factor_results_updated": factor_result_update,
                 "performance_saved": save_performance_snapshot_to_postgres(
                     performance_response
                 ),
@@ -2016,7 +2042,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
+            "source": "RRT Predictor v2.12.0 Factor Capture + Learning Centre",
             "meeting_id": meeting_id,
             "error": str(error),
         }

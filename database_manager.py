@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.9.0"
+SCHEMA_VERSION = "2.12.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -96,6 +96,67 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
         )
 
+
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_runner_factor_snapshots (
+                id SERIAL PRIMARY KEY,
+                meeting_id BIGINT NOT NULL,
+                model_version TEXT,
+                track TEXT,
+                meeting_date DATE,
+                race_id BIGINT,
+                race_number INTEGER,
+                runner_id BIGINT,
+                runner_key TEXT NOT NULL,
+                runner_name TEXT,
+                tab_number INTEGER,
+                final_score NUMERIC(6,2),
+                confidence NUMERIC(6,2),
+                market_price NUMERIC(10,2),
+                market_rank INTEGER,
+                last10_score NUMERIC(6,2),
+                win_place_score NUMERIC(6,2),
+                track_record_score NUMERIC(6,2),
+                distance_record_score NUMERIC(6,2),
+                track_distance_record_score NUMERIC(6,2),
+                track_condition_score NUMERIC(6,2),
+                trainer_score NUMERIC(6,2),
+                jockey_score NUMERIC(6,2),
+                trainer_jockey_score NUMERIC(6,2),
+                barrier_score NUMERIC(6,2),
+                weight_score NUMERIC(6,2),
+                market_score NUMERIC(6,2),
+                weighted_last10 NUMERIC(8,4),
+                weighted_win_place NUMERIC(8,4),
+                weighted_track_record NUMERIC(8,4),
+                weighted_distance_record NUMERIC(8,4),
+                weighted_track_distance_record NUMERIC(8,4),
+                weighted_track_condition NUMERIC(8,4),
+                weighted_trainer NUMERIC(8,4),
+                weighted_jockey NUMERIC(8,4),
+                weighted_trainer_jockey NUMERIC(8,4),
+                weighted_barrier NUMERIC(8,4),
+                weighted_weight NUMERIC(8,4),
+                weighted_market NUMERIC(8,4),
+                actual_position INTEGER,
+                actual_price NUMERIC(10,2),
+                hit_win BOOLEAN,
+                hit_place BOOLEAN,
+                factor_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        execute_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_rrt_runner_factor_latest
+            ON rrt_runner_factor_snapshots (meeting_id, model_version, runner_key);
+            """
+        )
+
         # Unique indexes added in Stage 2B.
         execute_sql(
             """
@@ -128,8 +189,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.9.2",
-                "RRT Predictor v2.9.2 PostgreSQL duplicate-safe persistence. No adaptive weighting active yet.",
+                "2.12.0",
+                "RRT Predictor v2.12.0 factor capture. Prediction logic unchanged; runner-level scoring components are persisted for adaptive learning analysis.",
                 True,
             ),
         )
@@ -145,11 +206,13 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_prediction_snapshots",
                 "rrt_results_snapshots",
                 "rrt_performance_snapshots",
+                "rrt_runner_factor_snapshots",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
                 "ux_rrt_results_latest",
                 "ux_rrt_performance_latest",
+                "ux_rrt_runner_factor_latest",
             ],
         }
 
@@ -204,6 +267,7 @@ def get_database_summary() -> Dict[str, Any]:
         prediction_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_prediction_snapshots;")
         results_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_results_snapshots;")
         performance_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_performance_snapshots;")
+        factor_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_runner_factor_snapshots;")
 
         averages = fetch_one(
             """
@@ -264,6 +328,7 @@ def get_database_summary() -> Dict[str, Any]:
                 "prediction_snapshots": int((prediction_count or {}).get("count") or 0),
                 "results_snapshots": int((results_count or {}).get("count") or 0),
                 "performance_snapshots": int((performance_count or {}).get("count") or 0),
+                "runner_factor_snapshots": int((factor_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,
@@ -510,5 +575,430 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
             "success": False,
             "provider": "PostgreSQL",
             "message": "Failed to save performance snapshot.",
+            "error": str(error),
+        }
+
+
+# ---------------------------------------------------------------------
+# Factor Capture - RRT Predictor v2.12.0
+# ---------------------------------------------------------------------
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _safe_float_or_none(value: Any):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _runner_factor_key(runner: Dict[str, Any]) -> str:
+    race_id = str(runner.get("race_id") or "").strip()
+    race_number = str(runner.get("race_number") or "").strip()
+    runner_id = str(runner.get("runner_id") or "").strip()
+    tab_number = str(runner.get("tab_number") or runner.get("number") or "").strip()
+    runner_name = str(runner.get("runner") or runner.get("horse_name") or "").upper().strip()
+
+    if runner_id and runner_id != "0":
+        return f"runner_id:{runner_id}"
+
+    return f"race:{race_id or race_number}|tab:{tab_number}|name:{runner_name}"
+
+
+def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        meeting_id = prediction_snapshot.get("meeting_id")
+        model_version = prediction_snapshot.get("model_version")
+        factor_capture = prediction_snapshot.get("factor_capture") or {}
+        runners = factor_capture.get("runners") or []
+
+        if not meeting_id:
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "message": "Factor capture skipped: prediction snapshot missing meeting_id.",
+            }
+
+        if not runners:
+            return {
+                "success": True,
+                "provider": "PostgreSQL",
+                "message": "No runner factor rows available to save.",
+                "meeting_id": meeting_id,
+                "saved_count": 0,
+            }
+
+        saved_count = 0
+
+        for runner in runners:
+            breakdown = runner.get("score_breakdown") or {}
+            weighted = runner.get("weighted_breakdown") or {}
+            runner_key = runner.get("runner_key") or _runner_factor_key(runner)
+
+            execute_sql(
+                """
+                INSERT INTO rrt_runner_factor_snapshots (
+                    meeting_id,
+                    model_version,
+                    track,
+                    meeting_date,
+                    race_id,
+                    race_number,
+                    runner_id,
+                    runner_key,
+                    runner_name,
+                    tab_number,
+                    final_score,
+                    confidence,
+                    market_price,
+                    market_rank,
+                    last10_score,
+                    win_place_score,
+                    track_record_score,
+                    distance_record_score,
+                    track_distance_record_score,
+                    track_condition_score,
+                    trainer_score,
+                    jockey_score,
+                    trainer_jockey_score,
+                    barrier_score,
+                    weight_score,
+                    market_score,
+                    weighted_last10,
+                    weighted_win_place,
+                    weighted_track_record,
+                    weighted_distance_record,
+                    weighted_track_distance_record,
+                    weighted_track_condition,
+                    weighted_trainer,
+                    weighted_jockey,
+                    weighted_trainer_jockey,
+                    weighted_barrier,
+                    weighted_weight,
+                    weighted_market,
+                    factor_json
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
+                ON CONFLICT (meeting_id, model_version, runner_key)
+                DO UPDATE SET
+                    track = EXCLUDED.track,
+                    meeting_date = EXCLUDED.meeting_date,
+                    race_id = EXCLUDED.race_id,
+                    race_number = EXCLUDED.race_number,
+                    runner_id = EXCLUDED.runner_id,
+                    runner_name = EXCLUDED.runner_name,
+                    tab_number = EXCLUDED.tab_number,
+                    final_score = EXCLUDED.final_score,
+                    confidence = EXCLUDED.confidence,
+                    market_price = EXCLUDED.market_price,
+                    market_rank = EXCLUDED.market_rank,
+                    last10_score = EXCLUDED.last10_score,
+                    win_place_score = EXCLUDED.win_place_score,
+                    track_record_score = EXCLUDED.track_record_score,
+                    distance_record_score = EXCLUDED.distance_record_score,
+                    track_distance_record_score = EXCLUDED.track_distance_record_score,
+                    track_condition_score = EXCLUDED.track_condition_score,
+                    trainer_score = EXCLUDED.trainer_score,
+                    jockey_score = EXCLUDED.jockey_score,
+                    trainer_jockey_score = EXCLUDED.trainer_jockey_score,
+                    barrier_score = EXCLUDED.barrier_score,
+                    weight_score = EXCLUDED.weight_score,
+                    market_score = EXCLUDED.market_score,
+                    weighted_last10 = EXCLUDED.weighted_last10,
+                    weighted_win_place = EXCLUDED.weighted_win_place,
+                    weighted_track_record = EXCLUDED.weighted_track_record,
+                    weighted_distance_record = EXCLUDED.weighted_distance_record,
+                    weighted_track_distance_record = EXCLUDED.weighted_track_distance_record,
+                    weighted_track_condition = EXCLUDED.weighted_track_condition,
+                    weighted_trainer = EXCLUDED.weighted_trainer,
+                    weighted_jockey = EXCLUDED.weighted_jockey,
+                    weighted_trainer_jockey = EXCLUDED.weighted_trainer_jockey,
+                    weighted_barrier = EXCLUDED.weighted_barrier,
+                    weighted_weight = EXCLUDED.weighted_weight,
+                    weighted_market = EXCLUDED.weighted_market,
+                    factor_json = EXCLUDED.factor_json,
+                    updated_at = NOW();
+                """,
+                (
+                    meeting_id,
+                    model_version,
+                    prediction_snapshot.get("track"),
+                    prediction_snapshot.get("meeting_date"),
+                    runner.get("race_id"),
+                    runner.get("race_number"),
+                    runner.get("runner_id"),
+                    runner_key,
+                    runner.get("runner") or runner.get("horse_name"),
+                    runner.get("tab_number") or runner.get("number"),
+                    runner.get("score"),
+                    runner.get("confidence"),
+                    runner.get("price"),
+                    runner.get("market_rank"),
+                    breakdown.get("last10_form"),
+                    breakdown.get("win_place"),
+                    breakdown.get("track_record"),
+                    breakdown.get("distance_record"),
+                    breakdown.get("track_distance_record"),
+                    breakdown.get("track_condition_record"),
+                    breakdown.get("trainer"),
+                    breakdown.get("jockey"),
+                    breakdown.get("trainer_jockey"),
+                    breakdown.get("barrier"),
+                    breakdown.get("weight"),
+                    breakdown.get("market_price"),
+                    weighted.get("last10_form"),
+                    weighted.get("win_place"),
+                    weighted.get("track_record"),
+                    weighted.get("distance_record"),
+                    weighted.get("track_distance_record"),
+                    weighted.get("track_condition_record"),
+                    weighted.get("trainer"),
+                    weighted.get("jockey"),
+                    weighted.get("trainer_jockey"),
+                    weighted.get("barrier"),
+                    weighted.get("weight"),
+                    weighted.get("market_price"),
+                    json.dumps(runner),
+                ),
+            )
+
+            saved_count += 1
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "message": "Runner factor snapshots saved or updated.",
+            "meeting_id": meeting_id,
+            "saved_count": saved_count,
+            "duplicate_safe": True,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "message": "Failed to save runner factor snapshots.",
+            "error": str(error),
+        }
+
+
+def update_runner_factor_results_from_results(
+    prediction_snapshot: Dict[str, Any],
+    results_snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        meeting_id = prediction_snapshot.get("meeting_id")
+        model_version = prediction_snapshot.get("model_version")
+        races = results_snapshot.get("races") or []
+        updated_count = 0
+
+        if not meeting_id:
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "message": "Factor result update skipped: missing meeting_id.",
+            }
+
+        factor_rows = fetch_all(
+            """
+            SELECT id, runner_key, race_number, runner_id, tab_number, runner_name
+            FROM rrt_runner_factor_snapshots
+            WHERE meeting_id = %s
+              AND model_version = %s;
+            """,
+            (
+                meeting_id,
+                model_version,
+            ),
+        )
+
+        if not factor_rows:
+            return {
+                "success": True,
+                "provider": "PostgreSQL",
+                "message": "No factor rows available for result update.",
+                "meeting_id": meeting_id,
+                "updated_count": 0,
+            }
+
+        results_by_race = {
+            str(race.get("race_number") or "").strip(): race
+            for race in races
+        }
+
+        for row in factor_rows:
+            race = results_by_race.get(str(row.get("race_number") or "").strip())
+
+            if not race:
+                continue
+
+            matched_result = None
+            row_runner_id = str(row.get("runner_id") or "").strip()
+            row_tab = str(row.get("tab_number") or "").strip()
+            row_name = str(row.get("runner_name") or "").upper().replace(".", "").replace("'", "").replace("’", "").replace("-", " ").strip()
+
+            for runner in race.get("runners") or []:
+                result_runner_id = str(runner.get("runner_id") or "").strip()
+                result_tab = str(runner.get("tab_number") or "").strip()
+                result_name = str(runner.get("runner") or "").upper().replace(".", "").replace("'", "").replace("’", "").replace("-", " ").strip()
+
+                if row_runner_id and row_runner_id != "0" and result_runner_id == row_runner_id:
+                    matched_result = runner
+                    break
+
+                if row_tab and result_tab == row_tab:
+                    matched_result = runner
+                    break
+
+                if row_name and result_name == row_name:
+                    matched_result = runner
+                    break
+
+            if not matched_result:
+                continue
+
+            actual_position = matched_result.get("position")
+            actual_price = matched_result.get("price")
+            hit_win = actual_position == 1
+            hit_place = actual_position in [1, 2, 3] if actual_position is not None else False
+
+            execute_sql(
+                """
+                UPDATE rrt_runner_factor_snapshots
+                SET
+                    actual_position = %s,
+                    actual_price = %s,
+                    hit_win = %s,
+                    hit_place = %s,
+                    updated_at = NOW()
+                WHERE id = %s;
+                """,
+                (
+                    actual_position,
+                    _safe_float_or_none(actual_price),
+                    hit_win,
+                    hit_place,
+                    row.get("id"),
+                ),
+            )
+
+            updated_count += 1
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "message": "Runner factor result fields updated.",
+            "meeting_id": meeting_id,
+            "updated_count": updated_count,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "message": "Failed to update runner factor results.",
+            "error": str(error),
+        }
+
+
+def get_factor_capture_summary() -> Dict[str, Any]:
+    try:
+        totals = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS runner_factor_rows,
+                COUNT(DISTINCT meeting_id) AS meeting_count,
+                COUNT(DISTINCT track) AS track_count,
+                COUNT(DISTINCT meeting_date) AS date_count,
+                COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS runners_with_results,
+                ROUND(AVG(final_score), 2) AS avg_final_score,
+                ROUND(AVG(confidence), 2) AS avg_confidence
+            FROM rrt_runner_factor_snapshots;
+            """
+        ) or {}
+
+        factor_averages = fetch_one(
+            """
+            SELECT
+                ROUND(AVG(last10_score), 2) AS avg_last10_score,
+                ROUND(AVG(win_place_score), 2) AS avg_win_place_score,
+                ROUND(AVG(track_record_score), 2) AS avg_track_record_score,
+                ROUND(AVG(distance_record_score), 2) AS avg_distance_record_score,
+                ROUND(AVG(track_distance_record_score), 2) AS avg_track_distance_record_score,
+                ROUND(AVG(track_condition_score), 2) AS avg_track_condition_score,
+                ROUND(AVG(trainer_score), 2) AS avg_trainer_score,
+                ROUND(AVG(jockey_score), 2) AS avg_jockey_score,
+                ROUND(AVG(trainer_jockey_score), 2) AS avg_trainer_jockey_score,
+                ROUND(AVG(barrier_score), 2) AS avg_barrier_score,
+                ROUND(AVG(weight_score), 2) AS avg_weight_score,
+                ROUND(AVG(market_score), 2) AS avg_market_score
+            FROM rrt_runner_factor_snapshots;
+            """
+        ) or {}
+
+        winner_averages = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS winner_count,
+                ROUND(AVG(final_score), 2) AS avg_winner_final_score,
+                ROUND(AVG(last10_score), 2) AS avg_winner_last10_score,
+                ROUND(AVG(track_condition_score), 2) AS avg_winner_track_condition_score,
+                ROUND(AVG(trainer_jockey_score), 2) AS avg_winner_trainer_jockey_score,
+                ROUND(AVG(barrier_score), 2) AS avg_winner_barrier_score,
+                ROUND(AVG(market_score), 2) AS avg_winner_market_score
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position = 1;
+            """
+        ) or {}
+
+        latest = fetch_all(
+            """
+            SELECT
+                meeting_id,
+                track,
+                meeting_date,
+                COUNT(*) AS runner_factor_rows,
+                COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS runners_with_results,
+                ROUND(AVG(final_score), 2) AS avg_final_score
+            FROM rrt_runner_factor_snapshots
+            GROUP BY meeting_id, track, meeting_date
+            ORDER BY meeting_date DESC, meeting_id DESC
+            LIMIT 20;
+            """
+        )
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "schema_version": SCHEMA_VERSION,
+            "report": "factor_capture_summary",
+            "totals": totals,
+            "factor_averages": factor_averages,
+            "winner_averages": winner_averages,
+            "latest_meetings": latest,
+            "analysis_note": "Factor capture is observational only. Prediction weights are unchanged.",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "schema_version": SCHEMA_VERSION,
+            "report": "factor_capture_summary",
             "error": str(error),
         }

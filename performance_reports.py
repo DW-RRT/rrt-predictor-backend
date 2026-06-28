@@ -6,11 +6,11 @@ from io import BytesIO
 from database import fetch_all, fetch_one
 
 
-REPORT_VERSION = "2.11.0"
-ANALYTICS_VERSION = "2.11.0"
-DATABASE_SCHEMA_VERSION = "2.9.0"
+REPORT_VERSION = "2.12.0"
+ANALYTICS_VERSION = "2.12.0"
+DATABASE_SCHEMA_VERSION = "2.12.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.11.0"
+LEARNING_VERSION = "2.12.0"
 
 
 # ---------------------------------------------------------------------
@@ -1061,7 +1061,7 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
     if _to_float(summary.get("avg_rrt_vs_pf_ai_gap")) > 0:
         actions.append({"priority": "Medium", "action": "Protect current RRT advantage over PF AI", "reason": f"RRT is currently ahead of PF AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}.", "next_step": "Any future adaptive weighting should be tested against this baseline before production."})
     if base.get("ready_for_learning"):
-        actions.append({"priority": "Medium", "action": "Begin factor capture design", "reason": "Dataset is large enough for learning analysis, but production weight changes require factor-level evidence.", "next_step": "Build v2.12.0 factor capture before recommending specific scoring weight changes."})
+        actions.append({"priority": "Medium", "action": "Review factor-capture dataset", "reason": "Dataset is large enough for learning analysis and v2.12.0 now captures runner-level scoring factors.", "next_step": "Collect completed meetings with factor rows and compare winning runners against each scoring component before recommending specific weight changes."})
     return actions
 
 
@@ -1140,7 +1140,7 @@ def generate_learning_report_html() -> str:
         '<h2>Tracks Requiring Review</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
         '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.11.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.12.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
