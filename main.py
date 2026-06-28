@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Query, UploadFile, File
+from fastapi import FastAPI, Query, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from urllib.parse import quote
@@ -69,6 +70,9 @@ from performance_reports import (
     get_analytics_by_date,
     get_analytics_rrt_vs_pf_ai,
     get_analytics_learning_readiness,
+    get_learning_recommendations,
+    generate_learning_report_html,
+    generate_learning_report_pdf_bytes,
 )
 
 from historical_importer import (
@@ -77,7 +81,7 @@ from historical_importer import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.10.0",
+    version="2.11.0",
 )
 
 app.add_middleware(
@@ -763,9 +767,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.10.0",
+        "version": "2.11.0",
         "app_version": "1.0.0",
-        "backend_version": "2.10.0",
+        "backend_version": "2.11.0",
         "model_version": "2.8.1",
     }
 
@@ -776,9 +780,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.10.0",
+        "version": "2.11.0",
         "app_version": "1.0.0",
-        "backend_version": "2.10.0",
+        "backend_version": "2.11.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -815,6 +819,9 @@ def api_route_check():
         "/api/analytics/by-date": True,
         "/api/analytics/rrt-vs-pf-ai": True,
         "/api/analytics/learning-readiness": True,
+        "/api/learning/recommendations": True,
+        "/api/learning/report-html": True,
+        "/api/learning/report-pdf": True,
     }
 
     route_availability = {
@@ -825,9 +832,9 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.10.0",
+        "version": "2.11.0",
         "app_version": "1.0.0",
-        "backend_version": "2.10.0",
+        "backend_version": "2.11.0",
         "model_version": "2.8.1",
         "database_schema_version": "2.9.0",
         "required_routes": route_availability,
@@ -858,6 +865,14 @@ def api_route_check():
                 "/api/analytics/by-date",
                 "/api/analytics/rrt-vs-pf-ai",
                 "/api/analytics/learning-readiness",
+            ]
+        ),
+        "learning_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/learning/recommendations",
+                "/api/learning/report-html",
+                "/api/learning/report-pdf",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -945,7 +960,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.10.0
+# Performance Reporting Routes - RRT Predictor v2.11.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -979,7 +994,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.10.0
+# Performance Analytics Routes - RRT Predictor v2.11.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1015,6 +1030,33 @@ def api_analytics_rrt_vs_pf_ai(
 @app.get("/api/analytics/learning-readiness")
 def api_analytics_learning_readiness():
     return get_analytics_learning_readiness()
+
+
+# ---------------------------------------------------------------------
+# Learning Centre Routes - RRT Predictor v2.11.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/learning/recommendations")
+def api_learning_recommendations():
+    return get_learning_recommendations()
+
+
+@app.get("/api/learning/report-html", response_class=HTMLResponse)
+def api_learning_report_html():
+    return generate_learning_report_html()
+
+
+@app.get("/api/learning/report-pdf")
+def api_learning_report_pdf():
+    pdf_bytes = generate_learning_report_pdf_bytes()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_11_0.pdf"
+        },
+    )
 
 
 # ---------------------------------------------------------------------
@@ -1334,7 +1376,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.10.0)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.11.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1727,7 +1769,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
+        "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1843,7 +1885,7 @@ def api_punting_form_predict(
                 "storage": "in_memory + PostgreSQL",
                 "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
                 "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "note": "Prediction snapshot stored for v2.10.0 PostgreSQL-backed analytics and accuracy tracking.",
+                "note": "Prediction snapshot stored for v2.11.0 PostgreSQL-backed learning, analytics, and accuracy tracking.",
             }
 
         return prediction_response
@@ -1935,7 +1977,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
+                "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -1974,7 +2016,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.10.0 PostgreSQL Analytics + Accuracy Tracking",
+            "source": "RRT Predictor v2.11.0 Learning Centre + PostgreSQL Analytics",
             "meeting_id": meeting_id,
             "error": str(error),
         }
