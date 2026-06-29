@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.12.1"
+SCHEMA_VERSION = "2.12.4"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -444,6 +444,86 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
             "success": False,
             "provider": "PostgreSQL",
             "message": "Failed to save prediction snapshot.",
+            "error": str(error),
+        }
+
+
+def load_prediction_snapshot(
+    meeting_id: int,
+    model_version: str = "2.8.1",
+) -> Dict[str, Any]:
+    try:
+        row = fetch_one(
+            """
+            SELECT
+                meeting_id,
+                model_version,
+                track,
+                meeting_date,
+                track_condition,
+                weather,
+                prediction_json,
+                saved_at,
+                created_at,
+                updated_at
+            FROM rrt_prediction_snapshots
+            WHERE meeting_id = %s
+              AND model_version = %s
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1;
+            """,
+            (
+                meeting_id,
+                model_version,
+            ),
+        )
+
+        if not row:
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "message": "No stored prediction snapshot found in PostgreSQL.",
+                "meeting_id": meeting_id,
+                "model_version": model_version,
+            }
+
+        prediction_json = row.get("prediction_json") or {}
+
+        if isinstance(prediction_json, str):
+            prediction_json = json.loads(prediction_json)
+
+        if not isinstance(prediction_json, dict):
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "message": "Stored prediction snapshot is not a valid JSON object.",
+                "meeting_id": meeting_id,
+                "model_version": model_version,
+            }
+
+        prediction_json["meeting_id"] = prediction_json.get("meeting_id") or row.get("meeting_id")
+        prediction_json["model_version"] = prediction_json.get("model_version") or row.get("model_version")
+        prediction_json["track"] = prediction_json.get("track") or row.get("track")
+        prediction_json["meeting_date"] = prediction_json.get("meeting_date") or row.get("meeting_date")
+        prediction_json["track_condition"] = prediction_json.get("track_condition") or row.get("track_condition")
+        prediction_json["weather"] = prediction_json.get("weather") or row.get("weather")
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "message": "Prediction snapshot loaded from PostgreSQL.",
+            "meeting_id": meeting_id,
+            "model_version": model_version,
+            "snapshot": prediction_json,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "message": "Failed to load prediction snapshot from PostgreSQL.",
+            "meeting_id": meeting_id,
+            "model_version": model_version,
             "error": str(error),
         }
 
