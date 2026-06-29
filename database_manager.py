@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.12.4"
+SCHEMA_VERSION = "2.12.5"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -463,7 +463,6 @@ def load_prediction_snapshot(
                 track_condition,
                 weather,
                 prediction_json,
-                saved_at,
                 created_at,
                 updated_at
             FROM rrt_prediction_snapshots
