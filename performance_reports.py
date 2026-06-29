@@ -6,11 +6,11 @@ from io import BytesIO
 from database import fetch_all, fetch_one
 
 
-REPORT_VERSION = "2.12.0"
-ANALYTICS_VERSION = "2.12.0"
+REPORT_VERSION = "2.12.2"
+ANALYTICS_VERSION = "2.12.2"
 DATABASE_SCHEMA_VERSION = "2.12.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.12.0"
+LEARNING_VERSION = "2.12.2"
 
 
 # ---------------------------------------------------------------------
@@ -1065,6 +1065,135 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
     return actions
 
 
+
+# ---------------------------------------------------------------------
+# v2.12.2 Rolling Each-Way Leaderboards
+# ---------------------------------------------------------------------
+
+MIN_LEADERBOARD_RUNNERS = 1
+
+
+def _leaderboard_query(
+    group_expr: str,
+    name_field: str,
+    where_extra: str = "",
+    min_runners: int = MIN_LEADERBOARD_RUNNERS,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    return fetch_all(
+        f"""
+        SELECT
+            {group_expr} AS {name_field},
+            COUNT(*) AS runner_count,
+            SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
+            ROUND(
+                (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+                2
+            ) AS each_way_place_strike_rate,
+            ROUND(AVG(final_score), 2) AS avg_final_score,
+            ROUND(AVG(confidence), 2) AS avg_confidence
+        FROM rrt_runner_factor_snapshots
+        WHERE actual_position IS NOT NULL
+          AND {group_expr} IS NOT NULL
+          AND TRIM(CAST({group_expr} AS TEXT)) <> ''
+          {where_extra}
+        GROUP BY {group_expr}
+        HAVING COUNT(*) >= %s
+        ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+        LIMIT %s;
+        """,
+        (min_runners, limit),
+    )
+
+
+def get_each_way_leaderboards(
+    min_runners: int = MIN_LEADERBOARD_RUNNERS,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    try:
+        totals = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS runner_factor_rows,
+                COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS runners_with_results,
+                COUNT(*) FILTER (WHERE hit_place IS TRUE) AS placed_runners,
+                COUNT(DISTINCT meeting_id) AS meeting_count,
+                COUNT(DISTINCT track) AS track_count,
+                COUNT(DISTINCT meeting_date) AS date_count
+            FROM rrt_runner_factor_snapshots;
+            """
+        ) or {}
+
+        trainers = _leaderboard_query(
+            "trainer",
+            "trainer",
+            "AND UPPER(TRIM(CAST(trainer AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
+            min_runners,
+            limit,
+        )
+
+        jockeys = _leaderboard_query(
+            "jockey",
+            "jockey",
+            "AND UPPER(TRIM(CAST(jockey AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
+            min_runners,
+            limit,
+        )
+
+        combinations = _leaderboard_query(
+            "CONCAT(TRIM(COALESCE(trainer, '')), ' / ', TRIM(COALESCE(jockey, '')))",
+            "trainer_jockey_combination",
+            """
+            AND TRIM(COALESCE(trainer, '')) <> ''
+            AND TRIM(COALESCE(jockey, '')) <> ''
+            AND UPPER(TRIM(COALESCE(trainer, ''))) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            AND UPPER(TRIM(COALESCE(jockey, ''))) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            """,
+            min_runners,
+            limit,
+        )
+
+        horses = _leaderboard_query(
+            "runner_name",
+            "horse",
+            "AND UPPER(TRIM(CAST(runner_name AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
+            min_runners,
+            limit,
+        )
+
+        def ranked(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            return [{"rank": i, **row} for i, row in enumerate(rows, start=1)]
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "report": "rolling_each_way_leaderboards",
+            "leaderboard_version": "2.12.2",
+            "generated_at": _now_utc_iso(),
+            "minimum_runners": min_runners,
+            "limit": limit,
+            "ranking_method": "Each-way placing success based on hit_place = true in rrt_runner_factor_snapshots.",
+            "dataset": totals,
+            "top_trainers": ranked(trainers),
+            "top_jockeys": ranked(jockeys),
+            "top_trainer_jockey_combinations": ranked(combinations),
+            "top_horses": ranked(horses),
+            "note": (
+                "These are rolling figures from v2.12.1+ factor capture rows after official results have updated. "
+                "Early figures may be volatile until more completed meetings are collected."
+            ),
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "report": "rolling_each_way_leaderboards",
+            "leaderboard_version": "2.12.2",
+            "error": str(error),
+        }
+
+
 def get_learning_recommendations() -> Dict[str, Any]:
     try:
         base = _learning_base()
@@ -1094,6 +1223,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "priority_action_plan": _learning_actions(base),
             "track_sets": tracks,
             "date_sets": dates,
+            "each_way_leaderboards": get_each_way_leaderboards(),
             "safety_note": "This report is analysis-only. No model weights, scoring factors, or production prediction behaviour have been changed.",
         }
     except Exception as error:
@@ -1139,8 +1269,14 @@ def generate_learning_report_html() -> str:
         '<h2>Strongest Tracks</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
         '<h2>Tracks Requiring Review</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
         '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
+        '<h2>Rolling Each-Way Leaderboards</h2>',
+        '<div class="note">These leaderboards are based on completed v2.12.1+ runner factor rows where official results have been matched. Ranking is by each-way placing strike rate.</div>',
+        '<h3>Top 10 Trainers</h3>', _html_table(['Rank','Trainer','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainers') or [])[:10]]),
+        '<h3>Top 10 Jockeys</h3>', _html_table(['Rank','Jockey','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_jockeys') or [])[:10]]),
+        '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
+        '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.12.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.12.2 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
@@ -1189,5 +1325,18 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(Paragraph("Strongest Tracks", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]))
     story.append(Paragraph("Tracks Requiring Review", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]))
     story.append(Paragraph("Recent Daily Performance", styles["RRTHeading"])); story.append(t(["Date","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]))
+
+    leaderboards = report.get("each_way_leaderboards") or {}
+    story.append(PageBreak())
+    story.append(Paragraph("Rolling Each-Way Leaderboards", styles["RRTHeading"]))
+    story.append(Paragraph("These leaderboards are based on completed v2.12.1+ runner factor rows where official results have been matched. Ranking is by each-way placing strike rate.", styles["BodyText"]))
+    story.append(Paragraph("Top 10 Trainers", styles["RRTHeading"]))
+    story.append(t(["Rank","Trainer","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainers') or [])[:10]]))
+    story.append(Paragraph("Top 10 Jockeys", styles["RRTHeading"]))
+    story.append(t(["Rank","Jockey","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_jockeys') or [])[:10]]))
+    story.append(Paragraph("Top 10 Trainer / Jockey Combinations", styles["RRTHeading"]))
+    story.append(t(["Rank","Combination","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainer_jockey_combinations') or [])[:10]]))
+    story.append(Paragraph("Top 10 Horses", styles["RRTHeading"]))
+    story.append(t(["Rank","Horse","Runs","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
     story.append(Paragraph("Safety Statement", styles["RRTHeading"])); story.append(Paragraph(escape(str(report.get("safety_note"))), styles["BodyText"]))
     doc.build(story); buffer.seek(0); return buffer.getvalue()

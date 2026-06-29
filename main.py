@@ -74,6 +74,7 @@ from performance_reports import (
     get_analytics_rrt_vs_pf_ai,
     get_analytics_learning_readiness,
     get_learning_recommendations,
+    get_each_way_leaderboards,
     generate_learning_report_html,
     generate_learning_report_pdf_bytes,
 )
@@ -84,7 +85,7 @@ from historical_importer import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.12.1",
+    version="2.12.2",
 )
 
 app.add_middleware(
@@ -770,9 +771,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.12.1",
+        "version": "2.12.2",
         "app_version": "1.0.0",
-        "backend_version": "2.12.1",
+        "backend_version": "2.12.2",
         "model_version": "2.8.1",
     }
 
@@ -783,9 +784,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.12.1",
+        "version": "2.12.2",
         "app_version": "1.0.0",
-        "backend_version": "2.12.1",
+        "backend_version": "2.12.2",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -826,6 +827,7 @@ def api_route_check():
         "/api/learning/report-html": True,
         "/api/learning/report-pdf": True,
         "/api/factor-capture/summary": True,
+        "/api/learning/each-way-leaderboards": True,
     }
 
     route_availability = {
@@ -836,11 +838,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.12.1",
+        "version": "2.12.2",
         "app_version": "1.0.0",
-        "backend_version": "2.12.1",
+        "backend_version": "2.12.2",
         "model_version": "2.8.1",
-        "database_schema_version": "2.12.0",
+        "database_schema_version": "2.12.2",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -877,6 +879,7 @@ def api_route_check():
                 "/api/learning/recommendations",
                 "/api/learning/report-html",
                 "/api/learning/report-pdf",
+                "/api/learning/each-way-leaderboards",
             ]
         ),
         "factor_capture_routes_available": route_availability.get("/api/factor-capture/summary"),
@@ -965,7 +968,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.12.1
+# Performance Reporting Routes - RRT Predictor v2.12.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -999,7 +1002,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.12.1
+# Performance Analytics Routes - RRT Predictor v2.12.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1038,12 +1041,23 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.12.1
+# Learning Centre Routes - RRT Predictor v2.12.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
 def api_learning_recommendations():
     return get_learning_recommendations()
+
+
+@app.get("/api/learning/each-way-leaderboards")
+def api_learning_each_way_leaderboards(
+    min_runners: int = Query(1),
+    limit: int = Query(10),
+):
+    return get_each_way_leaderboards(
+        min_runners=min_runners,
+        limit=limit,
+    )
 
 
 @app.get("/api/learning/report-html", response_class=HTMLResponse)
@@ -1059,13 +1073,13 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_12_1.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_12_2.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.12.1
+# Factor Capture Routes - RRT Predictor v2.12.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1390,7 +1404,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.12.1)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.12.2)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1787,7 +1801,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.12.1 Factor Capture Patch + Learning Centre",
+        "source": "RRT Predictor v2.12.2 Learning Report Leaderboards + Factor Capture",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1906,7 +1920,7 @@ def api_punting_form_predict(
                 "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
                 "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
                 "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.12.1 PostgreSQL-backed learning and accuracy tracking.",
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.12.2 PostgreSQL-backed learning, each-way leaderboards, and accuracy tracking.",
             }
 
         return prediction_response
@@ -1998,7 +2012,7 @@ def api_punting_form_performance(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.12.1 Factor Capture Patch + Learning Centre",
+                "source": "RRT Predictor v2.12.2 Learning Report Leaderboards + Factor Capture",
                 "meeting_id": meeting_id,
                 "message": "No stored prediction found for this meeting. Run /api/punting-form-predict before importing performance.",
             }
@@ -2042,7 +2056,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.12.1 Factor Capture Patch + Learning Centre",
+            "source": "RRT Predictor v2.12.2 Learning Report Leaderboards + Factor Capture",
             "meeting_id": meeting_id,
             "error": str(error),
         }
