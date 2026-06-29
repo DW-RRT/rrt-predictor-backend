@@ -6,11 +6,11 @@ from io import BytesIO
 from database import fetch_all, fetch_one
 
 
-REPORT_VERSION = "2.12.3"
-ANALYTICS_VERSION = "2.12.3"
-DATABASE_SCHEMA_VERSION = "2.12.0"
+REPORT_VERSION = "2.13.0"
+ANALYTICS_VERSION = "2.13.0"
+DATABASE_SCHEMA_VERSION = "2.13.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.12.3"
+LEARNING_VERSION = "2.13.0"
 
 
 # ---------------------------------------------------------------------
@@ -1055,13 +1055,13 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
     summary = base.get("summary") or {}
     actions = []
     if _to_float(summary.get("avg_roughie_strike_rate")) < 20:
-        actions.append({"priority": "High", "action": "Improve roughie selection logic", "reason": f"Roughie strike rate is {_pct(summary.get('avg_roughie_strike_rate'))}, materially below other categories.", "next_step": "In v2.12.0, capture factor-level scoring for roughie candidates."})
+        actions.append({"priority": "High", "action": "Improve roughie selection logic", "reason": f"Roughie strike rate is {_pct(summary.get('avg_roughie_strike_rate'))}, materially below other categories.", "next_step": "Use the v2.13.0 automatic results processor to keep factor data current, then compare roughie candidates against completed result outcomes."})
     if _to_float(summary.get("avg_top_win_strike_rate")) < 35:
         actions.append({"priority": "High", "action": "Review top-win ranking precision", "reason": f"Top-win strike rate is {_pct(summary.get('avg_top_win_strike_rate'))}.", "next_step": "Compare top-win selections against PF AI, winner price bands, track condition, and field size once factor capture is available."})
     if _to_float(summary.get("avg_rrt_vs_pf_ai_gap")) > 0:
         actions.append({"priority": "Medium", "action": "Protect current RRT advantage over PF AI", "reason": f"RRT is currently ahead of PF AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}.", "next_step": "Any future adaptive weighting should be tested against this baseline before production."})
     if base.get("ready_for_learning"):
-        actions.append({"priority": "Medium", "action": "Review factor-capture dataset", "reason": "Dataset is large enough for learning analysis and v2.12.0 now captures runner-level scoring factors.", "next_step": "Collect completed meetings with factor rows and compare winning runners against each scoring component before recommending specific weight changes."})
+        actions.append({"priority": "Medium", "action": "Review factor-capture dataset", "reason": "Dataset is large enough for learning analysis and v2.13.0 now automatically updates runner-level scoring factors after results are processed.", "next_step": "Collect completed meetings with factor rows and compare winning runners against each scoring component before recommending specific weight changes."})
     return actions
 
 
@@ -1221,7 +1221,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.12.3",
+            "leaderboard_version": "2.13.0",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
@@ -1242,7 +1242,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.12.3",
+            "leaderboard_version": "2.13.0",
             "error": str(error),
         }
 
@@ -1329,7 +1329,7 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.12.3 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.13.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

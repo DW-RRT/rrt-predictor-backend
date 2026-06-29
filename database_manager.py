@@ -1,10 +1,10 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 import json
 
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.12.6"
+SCHEMA_VERSION = "2.13.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -189,8 +189,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.12.0",
-                "RRT Predictor v2.12.0 factor capture. Prediction logic unchanged; runner-level scoring components are persisted for adaptive learning analysis.",
+                "2.13.0",
+                "RRT Predictor v2.13.0 automatic results processing. Prediction logic unchanged; saved predictions are processed automatically into results, performance, and factor-learning rows.",
                 True,
             ),
         )
@@ -1140,5 +1140,109 @@ def get_factor_capture_summary() -> Dict[str, Any]:
             "provider": "PostgreSQL",
             "schema_version": SCHEMA_VERSION,
             "report": "factor_capture_summary",
+            "error": str(error),
+        }
+
+
+# ---------------------------------------------------------------------
+# Automatic Results Processor - RRT Predictor v2.13.0
+# ---------------------------------------------------------------------
+
+
+def get_pending_prediction_snapshots_for_results(
+    limit: int = 25,
+) -> Dict[str, Any]:
+    try:
+        rows = fetch_all(
+            """
+            SELECT
+                p.meeting_id,
+                p.model_version,
+                p.track,
+                p.meeting_date,
+                p.created_at AS prediction_created_at
+            FROM rrt_prediction_snapshots p
+            LEFT JOIN rrt_performance_snapshots perf
+              ON perf.meeting_id = p.meeting_id
+             AND perf.model_version = p.model_version
+            WHERE perf.id IS NULL
+            ORDER BY p.meeting_date ASC NULLS LAST, p.created_at ASC
+            LIMIT %s;
+            """,
+            (limit,),
+        )
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "processor_version": "2.13.0",
+            "pending_count": len(rows),
+            "pending_predictions": rows,
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "processor_version": "2.13.0",
+            "message": "Failed to load pending prediction snapshots for automatic results processing.",
+            "error": str(error),
+        }
+
+
+def get_results_processor_summary() -> Dict[str, Any]:
+    try:
+        totals = fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM rrt_prediction_snapshots) AS prediction_snapshots,
+                (SELECT COUNT(*) FROM rrt_results_snapshots) AS results_snapshots,
+                (SELECT COUNT(*) FROM rrt_performance_snapshots) AS performance_snapshots,
+                (
+                    SELECT COUNT(*)
+                    FROM rrt_prediction_snapshots p
+                    LEFT JOIN rrt_performance_snapshots perf
+                      ON perf.meeting_id = p.meeting_id
+                     AND perf.model_version = p.model_version
+                    WHERE perf.id IS NULL
+                ) AS pending_performance_snapshots,
+                (
+                    SELECT COUNT(*)
+                    FROM rrt_runner_factor_snapshots
+                    WHERE actual_position IS NOT NULL
+                ) AS runner_factor_rows_with_results;
+            """
+        ) or {}
+
+        latest_processed = fetch_all(
+            """
+            SELECT
+                meeting_id,
+                track,
+                meeting_date,
+                model_version,
+                overall_accuracy,
+                created_at
+            FROM rrt_performance_snapshots
+            ORDER BY created_at DESC
+            LIMIT 10;
+            """
+        )
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "processor_version": "2.13.0",
+            "summary": totals,
+            "latest_processed": latest_processed,
+            "note": "Automatic results processing uses saved PostgreSQL prediction snapshots and is duplicate-safe.",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "processor_version": "2.13.0",
+            "message": "Failed to build results processor summary.",
             "error": str(error),
         }

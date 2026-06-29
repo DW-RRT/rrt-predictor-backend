@@ -2,6 +2,8 @@ from fastapi import FastAPI, Query, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from typing import Any, Dict, List, Optional
+import os
+import asyncio
 from datetime import datetime
 from urllib.parse import quote
 import time
@@ -58,6 +60,8 @@ from database_manager import (
     update_runner_factor_results_from_results,
     get_factor_capture_summary,
     load_prediction_snapshot as load_prediction_snapshot_from_postgres,
+    get_pending_prediction_snapshots_for_results,
+    get_results_processor_summary,
 )
 
 from database import execute_sql
@@ -86,7 +90,7 @@ from historical_importer import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.12.6",
+    version="2.13.0",
 )
 
 app.add_middleware(
@@ -106,6 +110,25 @@ CACHE_TTL_SECONDS = 300
 CACHE: Dict[str, Dict[str, Any]] = {}
 
 PREDICTION_HISTORY: Dict[str, Dict[str, Any]] = {}
+
+AUTO_RESULTS_PROCESSOR_ENABLED = (
+    os.getenv("AUTO_RESULTS_PROCESSOR_ENABLED", "true").lower() == "true"
+)
+AUTO_RESULTS_PROCESSOR_INTERVAL_SECONDS = int(
+    os.getenv("AUTO_RESULTS_PROCESSOR_INTERVAL_SECONDS", "3600")
+)
+AUTO_RESULTS_PROCESSOR_LIMIT = int(
+    os.getenv("AUTO_RESULTS_PROCESSOR_LIMIT", "25")
+)
+AUTO_RESULTS_PROCESSOR_STATE: Dict[str, Any] = {
+    "enabled": AUTO_RESULTS_PROCESSOR_ENABLED,
+    "interval_seconds": AUTO_RESULTS_PROCESSOR_INTERVAL_SECONDS,
+    "limit": AUTO_RESULTS_PROCESSOR_LIMIT,
+    "running": False,
+    "last_run_at": None,
+    "last_result": None,
+    "last_error": None,
+}
 
 
 
@@ -772,9 +795,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.12.6",
+        "version": "2.13.0",
         "app_version": "1.0.0",
-        "backend_version": "2.12.6",
+        "backend_version": "2.13.0",
         "model_version": "2.8.1",
     }
 
@@ -785,9 +808,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.12.6",
+        "version": "2.13.0",
         "app_version": "1.0.0",
-        "backend_version": "2.12.6",
+        "backend_version": "2.13.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -829,6 +852,8 @@ def api_route_check():
         "/api/learning/report-pdf": True,
         "/api/factor-capture/summary": True,
         "/api/learning/each-way-leaderboards": True,
+        "/api/results-processor/status": True,
+        "/api/results-processor/run": True,
     }
 
     route_availability = {
@@ -839,11 +864,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.12.6",
+        "version": "2.13.0",
         "app_version": "1.0.0",
-        "backend_version": "2.12.6",
+        "backend_version": "2.13.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.12.6",
+        "database_schema_version": "2.13.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -884,6 +909,13 @@ def api_route_check():
             ]
         ),
         "factor_capture_routes_available": route_availability.get("/api/factor-capture/summary"),
+        "results_processor_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/results-processor/status",
+                "/api/results-processor/run",
+            ]
+        ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
         "registered_route_count": len(registered_routes),
         "registered_routes": registered_routes,
@@ -969,7 +1001,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.12.6
+# Performance Reporting Routes - RRT Predictor v2.13.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1003,7 +1035,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.12.6
+# Performance Analytics Routes - RRT Predictor v2.13.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1042,7 +1074,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.12.6
+# Learning Centre Routes - RRT Predictor v2.13.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1074,13 +1106,13 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_12_6.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_13_0.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.12.6
+# Factor Capture Routes - RRT Predictor v2.13.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1405,7 +1437,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.12.6)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.13.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1802,7 +1834,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.12.6 Persistent Performance Loader Patch + Factor Capture",
+        "source": "RRT Predictor v2.13.0 Automatic Results Processor + Factor Capture",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1836,6 +1868,220 @@ def _compare_prediction_to_results(
             ],
         },
     }
+
+
+
+
+# ---------------------------------------------------------------------
+# Automatic Results Processor - RRT Predictor v2.13.0
+# ---------------------------------------------------------------------
+
+def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
+    prediction_snapshot = PREDICTION_HISTORY.get(str(meeting_id))
+    prediction_source = "memory"
+
+    if not prediction_snapshot:
+        postgres_prediction = load_prediction_snapshot_from_postgres(
+            meeting_id=meeting_id,
+            model_version="2.8.1",
+        )
+
+        if not postgres_prediction.get("success"):
+            return {
+                "success": False,
+                "provider": "RRT Predictor",
+                "source": "RRT Predictor v2.13.0 Automatic Results Processor",
+                "meeting_id": meeting_id,
+                "status": "prediction_missing",
+                "message": "No stored prediction found in memory or PostgreSQL.",
+                "postgres_prediction_lookup": postgres_prediction,
+            }
+
+        prediction_snapshot = postgres_prediction.get("snapshot") or {}
+        prediction_source = "postgres"
+        PREDICTION_HISTORY[str(meeting_id)] = prediction_snapshot
+
+    raw_results = _get_punting_form_results(meeting_id=meeting_id)
+    simplified_results = _simplify_punting_form_results(raw_results)
+
+    if not simplified_results.get("success"):
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Results",
+            "meeting_id": meeting_id,
+            "status": "results_not_ready",
+            "message": "Results API did not return a successful response.",
+            "results": simplified_results,
+        }
+
+    races = simplified_results.get("races") or []
+    completed_races = [
+        race for race in races
+        if (race.get("winner") or {}).get("runner")
+    ]
+
+    if not completed_races:
+        return {
+            "success": False,
+            "provider": "Punting Form",
+            "source": "Punting Form API - Results",
+            "meeting_id": meeting_id,
+            "status": "results_not_complete",
+            "message": "Results were returned but no completed winner data was available yet.",
+            "race_count": len(races),
+        }
+
+    results_postgres_save = save_results_snapshot_to_postgres(simplified_results)
+    factor_result_update = update_runner_factor_results_from_results(
+        prediction_snapshot=prediction_snapshot,
+        results_snapshot=simplified_results,
+    )
+
+    performance_response = _compare_prediction_to_results(
+        prediction_snapshot=prediction_snapshot,
+        results=simplified_results,
+    )
+
+    if performance_response.get("success"):
+        performance_response["prediction_snapshot_source"] = prediction_source
+        performance_response["automatic_results_processor"] = True
+        performance_response["postgres_history"] = {
+            "results_saved": results_postgres_save,
+            "factor_results_updated": factor_result_update,
+            "performance_saved": save_performance_snapshot_to_postgres(
+                performance_response
+            ),
+        }
+
+    return performance_response
+
+
+def run_results_processor_once(
+    limit: int = AUTO_RESULTS_PROCESSOR_LIMIT,
+) -> Dict[str, Any]:
+    pending_response = get_pending_prediction_snapshots_for_results(limit=limit)
+
+    if not pending_response.get("success"):
+        return {
+            "success": False,
+            "provider": "RRT Predictor",
+            "processor_version": "2.13.0",
+            "message": "Unable to load pending predictions.",
+            "pending_response": pending_response,
+        }
+
+    processed = []
+    skipped = []
+    failed = []
+
+    for item in pending_response.get("pending_predictions") or []:
+        meeting_id = item.get("meeting_id")
+
+        if not meeting_id:
+            skipped.append({
+                "status": "missing_meeting_id",
+                "item": item,
+            })
+            continue
+
+        result = _process_single_meeting_results(meeting_id=int(meeting_id))
+
+        if result.get("success"):
+            processed.append({
+                "meeting_id": meeting_id,
+                "track": result.get("track") or item.get("track"),
+                "meeting_date": result.get("meeting_date") or item.get("meeting_date"),
+                "overall_accuracy": (result.get("accuracy") or {}).get("overall_accuracy"),
+                "prediction_snapshot_source": result.get("prediction_snapshot_source"),
+            })
+        else:
+            status = result.get("status") or "failed"
+
+            if status in ["results_not_ready", "results_not_complete", "prediction_missing"]:
+                skipped.append({
+                    "meeting_id": meeting_id,
+                    "track": item.get("track"),
+                    "meeting_date": item.get("meeting_date"),
+                    "status": status,
+                    "message": result.get("message"),
+                })
+            else:
+                failed.append({
+                    "meeting_id": meeting_id,
+                    "track": item.get("track"),
+                    "meeting_date": item.get("meeting_date"),
+                    "status": status,
+                    "message": result.get("message"),
+                    "error": result.get("error"),
+                })
+
+    summary = get_results_processor_summary()
+
+    return {
+        "success": True,
+        "provider": "RRT Predictor",
+        "processor_version": "2.13.0",
+        "run_at": datetime.utcnow().isoformat() + "Z",
+        "limit": limit,
+        "pending_count": pending_response.get("pending_count"),
+        "processed_count": len(processed),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "processed": processed,
+        "skipped": skipped,
+        "failed": failed,
+        "processor_summary": summary,
+    }
+
+
+async def _results_processor_loop() -> None:
+    await asyncio.sleep(20)
+
+    while True:
+        try:
+            AUTO_RESULTS_PROCESSOR_STATE["running"] = True
+            result = run_results_processor_once(
+                limit=AUTO_RESULTS_PROCESSOR_LIMIT,
+            )
+            AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
+            AUTO_RESULTS_PROCESSOR_STATE["last_result"] = result
+            AUTO_RESULTS_PROCESSOR_STATE["last_error"] = None
+        except Exception as error:
+            AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
+            AUTO_RESULTS_PROCESSOR_STATE["last_error"] = str(error)
+        finally:
+            AUTO_RESULTS_PROCESSOR_STATE["running"] = False
+
+        await asyncio.sleep(AUTO_RESULTS_PROCESSOR_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def startup_results_processor():
+    if AUTO_RESULTS_PROCESSOR_ENABLED:
+        asyncio.create_task(_results_processor_loop())
+
+
+@app.get("/api/results-processor/status")
+def api_results_processor_status():
+    return {
+        "success": True,
+        "provider": "RRT Predictor",
+        "processor_version": "2.13.0",
+        "state": AUTO_RESULTS_PROCESSOR_STATE,
+        "database_summary": get_results_processor_summary(),
+    }
+
+
+@app.get("/api/results-processor/run")
+def api_results_processor_run(
+    limit: int = Query(AUTO_RESULTS_PROCESSOR_LIMIT),
+):
+    result = run_results_processor_once(limit=limit)
+    AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
+    AUTO_RESULTS_PROCESSOR_STATE["last_result"] = result
+    AUTO_RESULTS_PROCESSOR_STATE["last_error"] = None if result.get("success") else result.get("message")
+    return result
 
 
 # ---------------------------------------------------------------------
@@ -1921,7 +2167,7 @@ def api_punting_form_predict(
                 "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
                 "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
                 "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.12.6 PostgreSQL-backed persistent learning, each-way leaderboards, and accuracy tracking.",
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.13.0 PostgreSQL-backed automatic results processing, persistent learning, and accuracy tracking.",
             }
 
         return prediction_response
@@ -2007,74 +2253,13 @@ def api_punting_form_performance(
     meeting_id: int,
 ):
     try:
-        prediction_snapshot = PREDICTION_HISTORY.get(str(meeting_id))
-        prediction_source = "memory"
-
-        if not prediction_snapshot:
-            postgres_prediction = load_prediction_snapshot_from_postgres(
-                meeting_id=meeting_id,
-                model_version="2.8.1",
-            )
-
-            if not postgres_prediction.get("success"):
-                return {
-                    "success": False,
-                    "provider": "RRT Predictor",
-                    "source": "RRT Predictor v2.12.6 Persistent Performance Loader Patch + Factor Capture",
-                    "meeting_id": meeting_id,
-                    "message": (
-                        "No stored prediction found in memory or PostgreSQL. "
-                        "Run /api/punting-form-predict before importing performance."
-                    ),
-                    "postgres_prediction_lookup": postgres_prediction,
-                }
-
-            prediction_snapshot = postgres_prediction.get("snapshot") or {}
-            prediction_source = "postgres"
-
-            PREDICTION_HISTORY[str(meeting_id)] = prediction_snapshot
-
-        raw_results = _get_punting_form_results(meeting_id=meeting_id)
-        simplified_results = _simplify_punting_form_results(raw_results)
-
-        if not simplified_results.get("success"):
-            return {
-                "success": False,
-                "provider": "Punting Form",
-                "source": "Punting Form API - Results",
-                "meeting_id": meeting_id,
-                "message": "Results API did not return a successful response.",
-                "results": simplified_results,
-            }
-
-        results_postgres_save = save_results_snapshot_to_postgres(simplified_results)
-        factor_result_update = update_runner_factor_results_from_results(
-            prediction_snapshot=prediction_snapshot,
-            results_snapshot=simplified_results,
-        )
-
-        performance_response = _compare_prediction_to_results(
-            prediction_snapshot=prediction_snapshot,
-            results=simplified_results,
-        )
-
-        if performance_response.get("success"):
-            performance_response["prediction_snapshot_source"] = prediction_source
-            performance_response["postgres_history"] = {
-                "results_saved": results_postgres_save,
-                "factor_results_updated": factor_result_update,
-                "performance_saved": save_performance_snapshot_to_postgres(
-                    performance_response
-                ),
-            }
-
-        return performance_response
+        return _process_single_meeting_results(meeting_id=meeting_id)
 
     except Exception as error:
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.12.6 Persistent Performance Loader Patch + Factor Capture",
+            "source": "RRT Predictor v2.13.0 Automatic Results Processor + Factor Capture",
             "meeting_id": meeting_id,
             "error": str(error),
         }
