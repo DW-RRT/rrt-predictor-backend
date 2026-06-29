@@ -6,11 +6,11 @@ from io import BytesIO
 from database import fetch_all, fetch_one
 
 
-REPORT_VERSION = "2.12.2"
-ANALYTICS_VERSION = "2.12.2"
+REPORT_VERSION = "2.12.3"
+ANALYTICS_VERSION = "2.12.3"
 DATABASE_SCHEMA_VERSION = "2.12.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.12.2"
+LEARNING_VERSION = "2.12.3"
 
 
 # ---------------------------------------------------------------------
@@ -1067,43 +1067,20 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# v2.12.2 Rolling Each-Way Leaderboards
+# v2.12.3 Rolling Each-Way Leaderboards
 # ---------------------------------------------------------------------
 
 MIN_LEADERBOARD_RUNNERS = 1
 
 
-def _leaderboard_query(
-    group_expr: str,
-    name_field: str,
-    where_extra: str = "",
-    min_runners: int = MIN_LEADERBOARD_RUNNERS,
-    limit: int = 10,
-) -> List[Dict[str, Any]]:
-    return fetch_all(
-        f"""
-        SELECT
-            {group_expr} AS {name_field},
-            COUNT(*) AS runner_count,
-            SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
-            ROUND(
-                (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
-                2
-            ) AS each_way_place_strike_rate,
-            ROUND(AVG(final_score), 2) AS avg_final_score,
-            ROUND(AVG(confidence), 2) AS avg_confidence
-        FROM rrt_runner_factor_snapshots
-        WHERE actual_position IS NOT NULL
-          AND {group_expr} IS NOT NULL
-          AND TRIM(CAST({group_expr} AS TEXT)) <> ''
-          {where_extra}
-        GROUP BY {group_expr}
-        HAVING COUNT(*) >= %s
-        ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
-        LIMIT %s;
-        """,
-        (min_runners, limit),
-    )
+def _rank_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "rank": index,
+            **row,
+        }
+        for index, row in enumerate(rows, start=1)
+    ]
 
 
 def get_each_way_leaderboards(
@@ -1124,60 +1101,136 @@ def get_each_way_leaderboards(
             """
         ) or {}
 
-        trainers = _leaderboard_query(
-            "trainer",
-            "trainer",
-            "AND UPPER(TRIM(CAST(trainer AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
-            min_runners,
-            limit,
-        )
-
-        jockeys = _leaderboard_query(
-            "jockey",
-            "jockey",
-            "AND UPPER(TRIM(CAST(jockey AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
-            min_runners,
-            limit,
-        )
-
-        combinations = _leaderboard_query(
-            "CONCAT(TRIM(COALESCE(trainer, '')), ' / ', TRIM(COALESCE(jockey, '')))",
-            "trainer_jockey_combination",
+        trainers = fetch_all(
             """
-            AND TRIM(COALESCE(trainer, '')) <> ''
-            AND TRIM(COALESCE(jockey, '')) <> ''
-            AND UPPER(TRIM(COALESCE(trainer, ''))) NOT IN ('N/A', 'UNKNOWN', 'NONE')
-            AND UPPER(TRIM(COALESCE(jockey, ''))) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            SELECT
+                NULLIF(TRIM(factor_json->>'trainer'), '') AS trainer,
+                COUNT(*) AS runner_count,
+                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
+                ROUND(
+                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+                    2
+                ) AS each_way_place_strike_rate,
+                ROUND(AVG(final_score), 2) AS avg_final_score,
+                ROUND(AVG(confidence), 2) AS avg_confidence
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL
+              AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
+              AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            GROUP BY NULLIF(TRIM(factor_json->>'trainer'), '')
+            HAVING COUNT(*) >= %s
+            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+            LIMIT %s;
             """,
-            min_runners,
-            limit,
+            (min_runners, limit),
         )
 
-        horses = _leaderboard_query(
-            "runner_name",
-            "horse",
-            "AND UPPER(TRIM(CAST(runner_name AS TEXT))) NOT IN ('N/A', 'UNKNOWN', 'NONE')",
-            min_runners,
-            limit,
+        jockeys = fetch_all(
+            """
+            SELECT
+                NULLIF(TRIM(factor_json->>'jockey'), '') AS jockey,
+                COUNT(*) AS runner_count,
+                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
+                ROUND(
+                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+                    2
+                ) AS each_way_place_strike_rate,
+                ROUND(AVG(final_score), 2) AS avg_final_score,
+                ROUND(AVG(confidence), 2) AS avg_confidence
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL
+              AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
+              AND UPPER(TRIM(factor_json->>'jockey')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            GROUP BY NULLIF(TRIM(factor_json->>'jockey'), '')
+            HAVING COUNT(*) >= %s
+            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+            LIMIT %s;
+            """,
+            (min_runners, limit),
         )
 
-        def ranked(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            return [{"rank": i, **row} for i, row in enumerate(rows, start=1)]
+        combinations = fetch_all(
+            """
+            SELECT
+                CONCAT(
+                    NULLIF(TRIM(factor_json->>'trainer'), ''),
+                    ' / ',
+                    NULLIF(TRIM(factor_json->>'jockey'), '')
+                ) AS trainer_jockey_combination,
+                COUNT(*) AS runner_count,
+                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
+                ROUND(
+                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+                    2
+                ) AS each_way_place_strike_rate,
+                ROUND(AVG(final_score), 2) AS avg_final_score,
+                ROUND(AVG(confidence), 2) AS avg_confidence
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL
+              AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
+              AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
+              AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+              AND UPPER(TRIM(factor_json->>'jockey')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            GROUP BY
+                NULLIF(TRIM(factor_json->>'trainer'), ''),
+                NULLIF(TRIM(factor_json->>'jockey'), '')
+            HAVING COUNT(*) >= %s
+            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+            LIMIT %s;
+            """,
+            (min_runners, limit),
+        )
+
+        horses = fetch_all(
+            """
+            SELECT
+                COALESCE(
+                    NULLIF(TRIM(runner_name), ''),
+                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
+                    NULLIF(TRIM(factor_json->>'runner'), '')
+                ) AS horse,
+                COUNT(*) AS runner_count,
+                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
+                ROUND(
+                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+                    2
+                ) AS each_way_place_strike_rate,
+                ROUND(AVG(final_score), 2) AS avg_final_score,
+                ROUND(AVG(confidence), 2) AS avg_confidence
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL
+              AND COALESCE(
+                    NULLIF(TRIM(runner_name), ''),
+                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
+                    NULLIF(TRIM(factor_json->>'runner'), '')
+                  ) IS NOT NULL
+            GROUP BY
+                COALESCE(
+                    NULLIF(TRIM(runner_name), ''),
+                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
+                    NULLIF(TRIM(factor_json->>'runner'), '')
+                )
+            HAVING COUNT(*) >= %s
+            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+            LIMIT %s;
+            """,
+            (min_runners, limit),
+        )
 
         return {
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.12.2",
+            "leaderboard_version": "2.12.3",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
             "ranking_method": "Each-way placing success based on hit_place = true in rrt_runner_factor_snapshots.",
             "dataset": totals,
-            "top_trainers": ranked(trainers),
-            "top_jockeys": ranked(jockeys),
-            "top_trainer_jockey_combinations": ranked(combinations),
-            "top_horses": ranked(horses),
+            "top_trainers": _rank_rows(trainers),
+            "top_jockeys": _rank_rows(jockeys),
+            "top_trainer_jockey_combinations": _rank_rows(combinations),
+            "top_horses": _rank_rows(horses),
             "note": (
                 "These are rolling figures from v2.12.1+ factor capture rows after official results have updated. "
                 "Early figures may be volatile until more completed meetings are collected."
@@ -1189,7 +1242,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.12.2",
+            "leaderboard_version": "2.12.3",
             "error": str(error),
         }
 
@@ -1276,7 +1329,7 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.12.2 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.12.3 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
