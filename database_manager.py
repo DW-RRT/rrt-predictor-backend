@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.13.0"
+SCHEMA_VERSION = "2.14.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -189,8 +189,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.13.0",
-                "RRT Predictor v2.13.0 automatic results processing. Prediction logic unchanged; saved predictions are processed automatically into results, performance, and factor-learning rows.",
+                "2.14.0",
+                "RRT Predictor v2.14.0 evidence-based factor analysis. Prediction logic unchanged; model weight recommendations are analysis-only.",
                 True,
             ),
         )

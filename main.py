@@ -88,9 +88,19 @@ from historical_importer import (
     import_historical_performance_file,
 )
 
+from factor_analysis import (
+    get_factor_effectiveness_report,
+    get_factor_trend_report,
+    get_model_health_report,
+)
+
+from adaptive_weight_recommendations import (
+    get_weight_recommendations,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.13.0",
+    version="2.14.0",
 )
 
 app.add_middleware(
@@ -795,9 +805,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.13.0",
+        "version": "2.14.0",
         "app_version": "1.0.0",
-        "backend_version": "2.13.0",
+        "backend_version": "2.14.0",
         "model_version": "2.8.1",
     }
 
@@ -808,9 +818,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.13.0",
+        "version": "2.14.0",
         "app_version": "1.0.0",
-        "backend_version": "2.13.0",
+        "backend_version": "2.14.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -854,6 +864,10 @@ def api_route_check():
         "/api/learning/each-way-leaderboards": True,
         "/api/results-processor/status": True,
         "/api/results-processor/run": True,
+        "/api/analysis/factor-effectiveness": True,
+        "/api/analysis/factor-trends": True,
+        "/api/analysis/weight-recommendations": True,
+        "/api/analysis/model-health": True,
     }
 
     route_availability = {
@@ -864,11 +878,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.13.0",
+        "version": "2.14.0",
         "app_version": "1.0.0",
-        "backend_version": "2.13.0",
+        "backend_version": "2.14.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.13.0",
+        "database_schema_version": "2.14.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -914,6 +928,15 @@ def api_route_check():
             for route in [
                 "/api/results-processor/status",
                 "/api/results-processor/run",
+            ]
+        ),
+        "analysis_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/analysis/factor-effectiveness",
+                "/api/analysis/factor-trends",
+                "/api/analysis/weight-recommendations",
+                "/api/analysis/model-health",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -1001,7 +1024,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.13.0
+# Performance Reporting Routes - RRT Predictor v2.14.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1035,7 +1058,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.13.0
+# Performance Analytics Routes - RRT Predictor v2.14.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1074,7 +1097,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.13.0
+# Learning Centre Routes - RRT Predictor v2.14.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1106,18 +1129,44 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_13_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_14_0.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.13.0
+# Factor Capture Routes - RRT Predictor v2.14.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
 def api_factor_capture_summary():
     return get_factor_capture_summary()
+
+
+# ---------------------------------------------------------------------
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.14.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/analysis/factor-effectiveness")
+def api_analysis_factor_effectiveness():
+    return get_factor_effectiveness_report()
+
+
+@app.get("/api/analysis/factor-trends")
+def api_analysis_factor_trends(
+    limit: int = Query(30),
+):
+    return get_factor_trend_report(limit=limit)
+
+
+@app.get("/api/analysis/weight-recommendations")
+def api_analysis_weight_recommendations():
+    return get_weight_recommendations()
+
+
+@app.get("/api/analysis/model-health")
+def api_analysis_model_health():
+    return get_model_health_report()
 
 
 # ---------------------------------------------------------------------
@@ -1437,7 +1486,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.13.0)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.14.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1834,7 +1883,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.13.0 Automatic Results Processor + Factor Capture",
+        "source": "RRT Predictor v2.14.0 Evidence-Based Factor Analysis + Automatic Results Processor",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1873,7 +1922,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.13.0
+# Automatic Results Processor - RRT Predictor v2.14.0
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
@@ -1890,7 +1939,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.13.0 Automatic Results Processor",
+                "source": "RRT Predictor v2.14.0 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2167,7 +2216,7 @@ def api_punting_form_predict(
                 "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
                 "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
                 "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.13.0 PostgreSQL-backed automatic results processing, persistent learning, and accuracy tracking.",
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.14.0 PostgreSQL-backed evidence-based factor analysis, automatic results processing, and persistent learning.",
             }
 
         return prediction_response
@@ -2259,7 +2308,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.13.0 Automatic Results Processor + Factor Capture",
+            "source": "RRT Predictor v2.14.0 Evidence-Based Factor Analysis + Automatic Results Processor",
             "meeting_id": meeting_id,
             "error": str(error),
         }

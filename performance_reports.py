@@ -5,12 +5,15 @@ from io import BytesIO
 
 from database import fetch_all, fetch_one
 
+from factor_analysis import get_factor_effectiveness_report, get_model_health_report
+from adaptive_weight_recommendations import get_weight_recommendations
 
-REPORT_VERSION = "2.13.0"
-ANALYTICS_VERSION = "2.13.0"
-DATABASE_SCHEMA_VERSION = "2.13.0"
+
+REPORT_VERSION = "2.14.0"
+ANALYTICS_VERSION = "2.14.0"
+DATABASE_SCHEMA_VERSION = "2.14.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.13.0"
+LEARNING_VERSION = "2.14.0"
 
 
 # ---------------------------------------------------------------------
@@ -1221,7 +1224,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.13.0",
+            "leaderboard_version": "2.14.0",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
@@ -1242,7 +1245,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.13.0",
+            "leaderboard_version": "2.14.0",
             "error": str(error),
         }
 
@@ -1277,6 +1280,9 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "track_sets": tracks,
             "date_sets": dates,
             "each_way_leaderboards": get_each_way_leaderboards(),
+            "factor_effectiveness": get_factor_effectiveness_report(),
+            "weight_recommendations": get_weight_recommendations(),
+            "model_health": get_model_health_report(),
             "safety_note": "This report is analysis-only. No model weights, scoring factors, or production prediction behaviour have been changed.",
         }
     except Exception as error:
@@ -1315,7 +1321,7 @@ def generate_learning_report_html() -> str:
         '</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
-        _html_table(['Metric','Value'], [['Overall Accuracy',_pct(dataset.get('avg_overall_accuracy'))],['Top Win Strike Rate',_pct(dataset.get('avg_top_win_strike_rate'))],['Each Way Strike Rate',_pct(dataset.get('avg_each_way_strike_rate'))],['Roughie Strike Rate',_pct(dataset.get('avg_roughie_strike_rate'))],['Double Strike Rate',_pct(dataset.get('avg_double_strike_rate'))],['Quadrella Strike Rate',_pct(dataset.get('avg_quaddie_strike_rate'))],['PF AI Top Win Strike Rate',_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],['RRT Average Advantage',_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],['RRT Wins',h2h.get('rrt_wins')],['PF AI Wins',h2h.get('pf_ai_wins')],['Ties',h2h.get('ties')]]),
+        _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Strengths</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]),
         '<h2>Weaknesses</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('weaknesses') or []]),
         '<h2>Priority Action Plan</h2>', _html_table(['Priority','Action','Reason','Next Step'], [[i.get('priority'),i.get('action'),i.get('reason'),i.get('next_step')] for i in report.get('priority_action_plan') or []]),
@@ -1328,8 +1334,16 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Jockeys</h3>', _html_table(['Rank','Jockey','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_jockeys') or [])[:10]]),
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
+        '<h2>Evidence-Based Factor Analysis</h2>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It is analysis-only and does not change production weights.</div>',
+        '<h3>Factor Effectiveness Ranking</h3>',
+        _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:12]]),
+        '<h3>Weight Recommendation Review</h3>',
+        _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:12]]),
+        '<h3>Model Health</h3>',
+        _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.13.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.14.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
@@ -1391,5 +1405,18 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(t(["Rank","Combination","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainer_jockey_combinations') or [])[:10]]))
     story.append(Paragraph("Top 10 Horses", styles["RRTHeading"]))
     story.append(t(["Rank","Horse","Runs","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
+    story.append(PageBreak())
+    story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It is analysis-only and does not change production weights.", styles["BodyText"]))
+    factor_effectiveness = report.get("factor_effectiveness") or {}
+    weight_recommendations = report.get("weight_recommendations") or {}
+    model_health = report.get("model_health") or {}
+    story.append(Paragraph("Factor Effectiveness Ranking", styles["RRTHeading"]))
+    story.append(t(["Rank","Factor","Win Gap","Place Gap","Win Corr","Place Corr","Signal","Conf"], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence')] for i in (factor_effectiveness.get('factors') or [])[:12]]))
+    story.append(Paragraph("Weight Recommendation Review", styles["RRTHeading"]))
+    story.append(t(["Factor","Current","Rec.","Change","Direction","Priority"], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority')] for i in (weight_recommendations.get('recommendations') or [])[:12]]))
+    health_readiness = model_health.get("readiness") or {}
+    story.append(Paragraph("Model Health", styles["RRTHeading"]))
+    story.append(t(["Metric","Value"], [["Readiness Score", health_readiness.get('score')],["Dataset Maturity", health_readiness.get('maturity')],["Best Factor", (model_health.get('best_factor') or {}).get('label')],["Weakest Factor", (model_health.get('weakest_factor') or {}).get('label')],["Next Action", model_health.get('recommended_next_action')]], [5*cm,11*cm]))
     story.append(Paragraph("Safety Statement", styles["RRTHeading"])); story.append(Paragraph(escape(str(report.get("safety_note"))), styles["BodyText"]))
     doc.build(story); buffer.seek(0); return buffer.getvalue()
