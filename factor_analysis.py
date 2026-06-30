@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.14.0"
+ANALYSIS_VERSION = "2.14.1"
 MODEL_VERSION = "2.8.1"
 
 FACTOR_COLUMNS = [
@@ -99,8 +99,8 @@ def _factor_sql(score_column: str, weighted_column: str) -> str:
             ROUND(AVG(weighted_value), 4) AS weighted_average,
             ROUND(AVG(weighted_value) FILTER (WHERE win_flag = 1), 4) AS weighted_winner_average,
             ROUND(AVG(weighted_value) FILTER (WHERE place_flag = 1), 4) AS weighted_placed_average,
-            ROUND(CORR(score_value, win_flag), 4) AS win_correlation,
-            ROUND(CORR(score_value, place_flag), 4) AS place_correlation
+            ROUND(CORR(score_value, win_flag)::NUMERIC, 4) AS win_correlation,
+            ROUND(CORR(score_value, place_flag)::NUMERIC, 4) AS place_correlation
         FROM completed;
     """
 
@@ -163,7 +163,7 @@ def _trend_factor_group(score_column: str, meeting_ids: List[Any]) -> Dict[str, 
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL AND {score_column} IS NOT NULL AND meeting_id IN ({placeholders})
         )
-        SELECT COUNT(*) AS runner_count, ROUND(CORR(score_value, place_flag), 4) AS place_correlation FROM completed;
+        SELECT COUNT(*) AS runner_count, ROUND(CORR(score_value, place_flag)::NUMERIC, 4) AS place_correlation FROM completed;
     """, tuple(meeting_ids)) or {}
 
 
