@@ -10,11 +10,11 @@ from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
 
 
-REPORT_VERSION = "2.15.0"
-ANALYTICS_VERSION = "2.15.0"
-DATABASE_SCHEMA_VERSION = "2.15.0"
+REPORT_VERSION = "2.15.2"
+ANALYTICS_VERSION = "2.15.2"
+DATABASE_SCHEMA_VERSION = "2.15.2"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.15.0"
+LEARNING_VERSION = "2.15.2"
 
 
 # ---------------------------------------------------------------------
@@ -1347,9 +1347,9 @@ def generate_learning_report_html() -> str:
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
-        _html_table(['Simulation','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy'),(i.get('improvement_json') or {}).get('top_win_strike_rate'),(i.get('improvement_json') or {}).get('each_way_strike_rate'),(i.get('improvement_json') or {}).get('roughie_strike_rate'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:5]]),
+        _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.15.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.15.2 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

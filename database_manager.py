@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.15.0"
+SCHEMA_VERSION = "2.15.2"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -197,11 +197,23 @@ def init_postgres_schema() -> Dict[str, Any]:
                 improvement_json JSONB,
                 recommendation_json JSONB,
                 simulation_json JSONB NOT NULL,
+                simulation_group TEXT,
+                factor_tested TEXT,
+                old_weight NUMERIC,
+                new_weight NUMERIC,
+                change_amount NUMERIC,
                 notes TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             """
         )
+
+
+        execute_sql("ALTER TABLE rrt_weight_simulations ADD COLUMN IF NOT EXISTS simulation_group TEXT;")
+        execute_sql("ALTER TABLE rrt_weight_simulations ADD COLUMN IF NOT EXISTS factor_tested TEXT;")
+        execute_sql("ALTER TABLE rrt_weight_simulations ADD COLUMN IF NOT EXISTS old_weight NUMERIC;")
+        execute_sql("ALTER TABLE rrt_weight_simulations ADD COLUMN IF NOT EXISTS new_weight NUMERIC;")
+        execute_sql("ALTER TABLE rrt_weight_simulations ADD COLUMN IF NOT EXISTS change_amount NUMERIC;")
 
         execute_sql(
             """
@@ -213,8 +225,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.15.0",
-                "RRT Predictor v2.15.0 historical weight simulation. Prediction logic unchanged; simulation results are analysis-only.",
+                "2.15.2",
+                "RRT Predictor v2.15.2 single-factor historical simulation suite. Prediction logic unchanged; simulation results are analysis-only.",
                 True,
             ),
         )

@@ -5,7 +5,7 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.15.1"
+SIMULATOR_VERSION = "2.15.2"
 MODEL_VERSION = "2.8.1"
 
 
@@ -39,6 +39,23 @@ DEFAULT_TEST_WEIGHTS = {
     "weight": 5.0,
     "market": 14.0,
 }
+
+
+DEFAULT_SINGLE_FACTOR_SUITE = [
+    {"factor": "market", "change": 1.0, "label": "Market +1"},
+    {"factor": "market", "change": 2.0, "label": "Market +2"},
+    {"factor": "win_place", "change": 1.0, "label": "Win / Place +1"},
+    {"factor": "last10", "change": 1.0, "label": "Last 10 +1"},
+    {"factor": "weight", "change": -1.0, "label": "Weight -1"},
+    {"factor": "weight", "change": -2.0, "label": "Weight -2"},
+    {"factor": "barrier", "change": 1.0, "label": "Barrier +1"},
+    {"factor": "trainer", "change": -1.0, "label": "Trainer -1"},
+    {"factor": "trainer_jockey", "change": -1.0, "label": "Trainer / Jockey -1"},
+    {"factor": "track_condition", "change": -1.0, "label": "Track Condition -1"},
+    {"factor": "distance_record", "change": -1.0, "label": "Distance Record -1"},
+    {"factor": "track_record", "change": -1.0, "label": "Track Record -1"},
+    {"factor": "track_distance", "change": -1.0, "label": "Track / Distance -1"},
+]
 
 
 FACTOR_SCORE_COLUMNS = {
@@ -246,6 +263,11 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "report": "historical_weight_simulation",
             "simulation_id": simulation_id,
             "simulation_name": simulation_name,
+            "simulation_group": simulation_group,
+            "factor_tested": factor_tested,
+            "old_weight": old_weight,
+            "new_weight": new_weight,
+            "change_amount": change_amount,
             "analysis_only": True,
             "prediction_model_changed": False,
             "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
@@ -319,6 +341,107 @@ def get_best_simulations(limit: int=10) -> Dict[str, Any]:
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "best_simulations", "limit": limit, "simulation_count": len(rows), "simulations": rows}
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "best_simulations", "error": str(error)}
+
+
+
+def run_default_simulation_suite(
+    min_meeting_date: Optional[str] = None,
+    max_meeting_date: Optional[str] = None,
+    roughie_min_price: float = 10.0,
+    roughie_min_market_rank: int = 6,
+    roughie_min_score: float = 45.0,
+) -> Dict[str, Any]:
+    """Run one-factor-at-a-time simulations and save each result."""
+    try:
+        results: List[Dict[str, Any]] = []
+
+        for test in DEFAULT_SINGLE_FACTOR_SUITE:
+            factor = test.get("factor")
+            change = _to_float(test.get("change"))
+            old_weight = _to_float(CURRENT_MODEL_WEIGHTS.get(factor))
+            new_weight = max(0.0, old_weight + change)
+
+            test_weights = {factor: new_weight}
+            label = test.get("label") or f"{factor} {change:+.0f}"
+
+            result = run_weight_simulation(
+                test_weights=test_weights,
+                simulation_name=str(label),
+                notes="v2.15.2 single-factor default suite",
+                min_meeting_date=min_meeting_date,
+                max_meeting_date=max_meeting_date,
+                roughie_min_price=roughie_min_price,
+                roughie_min_market_rank=roughie_min_market_rank,
+                roughie_min_score=roughie_min_score,
+                save_result=True,
+                simulation_group="v2.15.2 default single-factor suite",
+                factor_tested=factor,
+                old_weight=old_weight,
+                new_weight=new_weight,
+                change_amount=round(new_weight - old_weight, 2),
+            )
+
+            results.append(
+                {
+                    "simulation_id": result.get("simulation_id"),
+                    "simulation_name": result.get("simulation_name"),
+                    "factor_tested": factor,
+                    "old_weight": old_weight,
+                    "new_weight": new_weight,
+                    "change_amount": round(new_weight - old_weight, 2),
+                    "success": result.get("success"),
+                    "improvement": result.get("improvement"),
+                    "recommendation": result.get("recommendation"),
+                    "postgres_history": result.get("postgres_history"),
+                }
+            )
+
+        improved = [
+            item for item in results
+            if _to_float((item.get("improvement") or {}).get("overall_accuracy")) > 0
+        ]
+        rejected = [
+            item for item in results
+            if (item.get("recommendation") or {}).get("status") == "Reject"
+        ]
+        neutral = [
+            item for item in results
+            if item not in improved and item not in rejected
+        ]
+
+        ranked = sorted(
+            results,
+            key=lambda item: _to_float((item.get("improvement") or {}).get("overall_accuracy")),
+            reverse=True,
+        )
+
+        return {
+            "success": True,
+            "provider": "RRT Predictor",
+            "simulator_version": SIMULATOR_VERSION,
+            "report": "default_single_factor_simulation_suite",
+            "analysis_only": True,
+            "prediction_model_changed": False,
+            "simulation_count": len(results),
+            "summary": {
+                "improved": len(improved),
+                "neutral": len(neutral),
+                "rejected": len(rejected),
+                "best_simulation": ranked[0] if ranked else None,
+                "recommended_for_further_testing": ranked[:5],
+            },
+            "results": ranked,
+            "safety_note": "Simulation suite only. No production model weights have been changed.",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "RRT Predictor",
+            "simulator_version": SIMULATOR_VERSION,
+            "report": "default_single_factor_simulation_suite",
+            "error": str(error),
+        }
 
 
 def get_simulation_report(simulation_id: Optional[str]=None) -> Dict[str, Any]:
