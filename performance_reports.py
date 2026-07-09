@@ -7,13 +7,14 @@ from database import fetch_all, fetch_one
 
 from factor_analysis import get_factor_effectiveness_report, get_model_health_report
 from adaptive_weight_recommendations import get_weight_recommendations
+from simulator_engine import get_best_simulations, get_simulation_history
 
 
-REPORT_VERSION = "2.14.0"
-ANALYTICS_VERSION = "2.14.0"
-DATABASE_SCHEMA_VERSION = "2.14.0"
+REPORT_VERSION = "2.15.0"
+ANALYTICS_VERSION = "2.15.0"
+DATABASE_SCHEMA_VERSION = "2.15.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.14.0"
+LEARNING_VERSION = "2.15.0"
 
 
 # ---------------------------------------------------------------------
@@ -1224,7 +1225,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.14.0",
+            "leaderboard_version": "2.15.0",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
@@ -1245,7 +1246,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.14.0",
+            "leaderboard_version": "2.15.0",
             "error": str(error),
         }
 
@@ -1283,6 +1284,8 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "factor_effectiveness": get_factor_effectiveness_report(),
             "weight_recommendations": get_weight_recommendations(),
             "model_health": get_model_health_report(),
+            "simulation_history": get_simulation_history(limit=5),
+            "best_simulations": get_best_simulations(limit=5),
             "safety_note": "This report is analysis-only. No model weights, scoring factors, or production prediction behaviour have been changed.",
         }
     except Exception as error:
@@ -1342,8 +1345,11 @@ def generate_learning_report_html() -> str:
         _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:12]]),
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
+        '<h2>Historical Weight Simulation</h2>',
+        '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
+        _html_table(['Simulation','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy'),(i.get('improvement_json') or {}).get('top_win_strike_rate'),(i.get('improvement_json') or {}).get('each_way_strike_rate'),(i.get('improvement_json') or {}).get('roughie_strike_rate'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:5]]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.14.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.15.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

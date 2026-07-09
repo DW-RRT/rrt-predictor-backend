@@ -98,9 +98,16 @@ from adaptive_weight_recommendations import (
     get_weight_recommendations,
 )
 
+from simulator_engine import (
+    run_weight_simulation,
+    get_simulation_report,
+    get_simulation_history,
+    get_best_simulations,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.14.0",
+    version="2.15.0",
 )
 
 app.add_middleware(
@@ -805,9 +812,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.14.0",
+        "version": "2.15.0",
         "app_version": "1.0.0",
-        "backend_version": "2.14.0",
+        "backend_version": "2.15.0",
         "model_version": "2.8.1",
     }
 
@@ -818,9 +825,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.14.0",
+        "version": "2.15.0",
         "app_version": "1.0.0",
-        "backend_version": "2.14.0",
+        "backend_version": "2.15.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -868,6 +875,10 @@ def api_route_check():
         "/api/analysis/factor-trends": True,
         "/api/analysis/weight-recommendations": True,
         "/api/analysis/model-health": True,
+        "/api/simulator/run": True,
+        "/api/simulator/report": True,
+        "/api/simulator/history": True,
+        "/api/simulator/best": True,
     }
 
     route_availability = {
@@ -878,11 +889,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.14.0",
+        "version": "2.15.0",
         "app_version": "1.0.0",
-        "backend_version": "2.14.0",
+        "backend_version": "2.15.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.14.0",
+        "database_schema_version": "2.15.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -937,6 +948,15 @@ def api_route_check():
                 "/api/analysis/factor-trends",
                 "/api/analysis/weight-recommendations",
                 "/api/analysis/model-health",
+            ]
+        ),
+        "simulator_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/simulator/run",
+                "/api/simulator/report",
+                "/api/simulator/history",
+                "/api/simulator/best",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -1024,7 +1044,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.14.0
+# Performance Reporting Routes - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1058,7 +1078,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.14.0
+# Performance Analytics Routes - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1097,7 +1117,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.14.0
+# Learning Centre Routes - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1129,13 +1149,13 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_14_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_15_0.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.14.0
+# Factor Capture Routes - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1144,7 +1164,7 @@ def api_factor_capture_summary():
 
 
 # ---------------------------------------------------------------------
-# Evidence-Based Factor Analysis Routes - RRT Predictor v2.14.0
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analysis/factor-effectiveness")
@@ -1167,6 +1187,80 @@ def api_analysis_weight_recommendations():
 @app.get("/api/analysis/model-health")
 def api_analysis_model_health():
     return get_model_health_report()
+
+
+
+
+# ---------------------------------------------------------------------
+# Historical Weight Simulation Routes - RRT Predictor v2.15.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/simulator/run")
+def api_simulator_run(
+    simulation_name: str = Query("v2.15.0 default simulation"),
+    notes: str = Query(""),
+    min_meeting_date: Optional[str] = Query(None),
+    max_meeting_date: Optional[str] = Query(None),
+    roughie_min_price: float = Query(7.0),
+    roughie_min_market_rank: int = Query(5),
+    roughie_min_score: float = Query(50.0),
+    last10: Optional[float] = Query(None),
+    win_place: Optional[float] = Query(None),
+    track_record: Optional[float] = Query(None),
+    distance_record: Optional[float] = Query(None),
+    track_distance: Optional[float] = Query(None),
+    track_condition: Optional[float] = Query(None),
+    trainer: Optional[float] = Query(None),
+    jockey: Optional[float] = Query(None),
+    trainer_jockey: Optional[float] = Query(None),
+    barrier: Optional[float] = Query(None),
+    weight: Optional[float] = Query(None),
+    market: Optional[float] = Query(None),
+):
+    test_weights = {
+        key: value
+        for key, value in {
+            "last10": last10,
+            "win_place": win_place,
+            "track_record": track_record,
+            "distance_record": distance_record,
+            "track_distance": track_distance,
+            "track_condition": track_condition,
+            "trainer": trainer,
+            "jockey": jockey,
+            "trainer_jockey": trainer_jockey,
+            "barrier": barrier,
+            "weight": weight,
+            "market": market,
+        }.items()
+        if value is not None
+    }
+    return run_weight_simulation(
+        test_weights=test_weights or None,
+        simulation_name=simulation_name,
+        notes=notes,
+        min_meeting_date=min_meeting_date,
+        max_meeting_date=max_meeting_date,
+        roughie_min_price=roughie_min_price,
+        roughie_min_market_rank=roughie_min_market_rank,
+        roughie_min_score=roughie_min_score,
+        save_result=True,
+    )
+
+
+@app.get("/api/simulator/report")
+def api_simulator_report(simulation_id: Optional[str] = Query(None)):
+    return get_simulation_report(simulation_id=simulation_id)
+
+
+@app.get("/api/simulator/history")
+def api_simulator_history(limit: int = Query(20)):
+    return get_simulation_history(limit=limit)
+
+
+@app.get("/api/simulator/best")
+def api_simulator_best(limit: int = Query(10)):
+    return get_best_simulations(limit=limit)
 
 
 # ---------------------------------------------------------------------
@@ -1486,7 +1580,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.14.0)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.15.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1883,7 +1977,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.14.0 Evidence-Based Factor Analysis + Automatic Results Processor",
+        "source": "RRT Predictor v2.15.0 Historical Weight Simulation + Roughie Refinement",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -1922,7 +2016,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.14.0
+# Automatic Results Processor - RRT Predictor v2.15.0
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
@@ -1939,7 +2033,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.14.0 Automatic Results Processor",
+                "source": "RRT Predictor v2.15.0 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2308,7 +2402,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.14.0 Evidence-Based Factor Analysis + Automatic Results Processor",
+            "source": "RRT Predictor v2.15.0 Historical Weight Simulation + Roughie Refinement",
             "meeting_id": meeting_id,
             "error": str(error),
         }

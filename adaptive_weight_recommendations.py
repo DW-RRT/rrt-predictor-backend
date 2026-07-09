@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 from factor_analysis import get_factor_effectiveness_report
 
-RECOMMENDATION_VERSION = "2.14.0"
+RECOMMENDATION_VERSION = "2.15.0"
 
 CURRENT_MODEL_WEIGHTS = {
     "last10": 14.0,

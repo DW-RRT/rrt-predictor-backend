@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.14.1"
+ANALYSIS_VERSION = "2.15.0"
 MODEL_VERSION = "2.8.1"
 
 FACTOR_COLUMNS = [

@@ -16,7 +16,7 @@ from punting_form_client import (
 
 
 MODEL_VERSION = "2.8.1"
-PREDICTION_TYPE = "RRT Predictor v2.12.0 - Punting Form Weighted Model v1.3 + Factor Capture"
+PREDICTION_TYPE = "RRT Predictor v2.15.0 - Punting Form Weighted Model v1.3 + Factor Capture + Roughie Refinement"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -487,8 +487,8 @@ def format_reason(runner: Dict[str, Any], category: str = "standard") -> str:
     if category == "roughie":
         if safe_int(runner.get("market_rank"), 99) >= 6:
             reasons.append("outside the main market but still rates competitively")
-        if safe_float(runner.get("price"), 0) >= 10:
-            reasons.append("available at a roughie price")
+        if safe_float(runner.get("price"), 0) >= 7:
+            reasons.append("available at a value roughie price")
 
     if safe_float(breakdown.get("last10_form")) >= 70:
         reasons.append("strong recent form profile")
@@ -588,7 +588,7 @@ def select_roughies(
         score = safe_float(runner.get("score"), 0)
         price = safe_float(runner.get("price"), 0)
 
-        if price > 0 and price >= 10 and market_rank >= 6 and score >= 45:
+        if price > 0 and price >= 7 and market_rank >= 5 and score >= 50:
             roughies.append(runner)
 
     return sorted(
