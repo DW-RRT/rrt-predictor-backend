@@ -5,7 +5,7 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.15.2"
+SIMULATOR_VERSION = "2.15.3"
 MODEL_VERSION = "2.8.1"
 
 
@@ -244,7 +244,12 @@ def _simulation_recommendation(improvement: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "Neutral", "priority": "Medium", "message": "Simulation did not materially outperform the current model."}
 
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.15.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True) -> Dict[str, Any]:
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.15.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+    simulation_group: str = "manual",
+    factor_tested: Optional[str] = None,
+    old_weight: Optional[float] = None,
+    new_weight: Optional[float] = None,
+    change_amount: Optional[float] = None) -> Dict[str, Any]:
     try:
         rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
         grouped = _group_by_race(rows)
@@ -263,6 +268,11 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "report": "historical_weight_simulation",
             "simulation_id": simulation_id,
             "simulation_name": simulation_name,
+            "simulation_group": simulation_group,
+            "factor_tested": factor_tested,
+            "old_weight": old_weight,
+            "new_weight": new_weight,
+            "change_amount": change_amount,
             "simulation_group": simulation_group,
             "factor_tested": factor_tested,
             "old_weight": old_weight,
