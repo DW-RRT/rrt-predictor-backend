@@ -5,7 +5,7 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.15.3"
+SIMULATOR_VERSION = "2.15.4"
 MODEL_VERSION = "2.8.1"
 
 
@@ -44,17 +44,40 @@ DEFAULT_TEST_WEIGHTS = {
 DEFAULT_SINGLE_FACTOR_SUITE = [
     {"factor": "market", "change": 1.0, "label": "Market +1"},
     {"factor": "market", "change": 2.0, "label": "Market +2"},
+    {"factor": "market", "change": 3.0, "label": "Market +3"},
+    {"factor": "market", "change": 4.0, "label": "Market +4"},
+
     {"factor": "win_place", "change": 1.0, "label": "Win / Place +1"},
+    {"factor": "win_place", "change": 2.0, "label": "Win / Place +2"},
+
     {"factor": "last10", "change": 1.0, "label": "Last 10 +1"},
+    {"factor": "last10", "change": 2.0, "label": "Last 10 +2"},
+
+    {"factor": "barrier", "change": 1.0, "label": "Barrier +1"},
+    {"factor": "barrier", "change": 2.0, "label": "Barrier +2"},
+
     {"factor": "weight", "change": -1.0, "label": "Weight -1"},
     {"factor": "weight", "change": -2.0, "label": "Weight -2"},
-    {"factor": "barrier", "change": 1.0, "label": "Barrier +1"},
+    {"factor": "weight", "change": -3.0, "label": "Weight -3"},
+    {"factor": "weight", "change": -4.0, "label": "Weight -4"},
+
     {"factor": "trainer", "change": -1.0, "label": "Trainer -1"},
+    {"factor": "trainer", "change": -2.0, "label": "Trainer -2"},
+
     {"factor": "trainer_jockey", "change": -1.0, "label": "Trainer / Jockey -1"},
+    {"factor": "trainer_jockey", "change": -2.0, "label": "Trainer / Jockey -2"},
+
     {"factor": "track_condition", "change": -1.0, "label": "Track Condition -1"},
+    {"factor": "track_condition", "change": -2.0, "label": "Track Condition -2"},
+
     {"factor": "distance_record", "change": -1.0, "label": "Distance Record -1"},
+    {"factor": "distance_record", "change": -2.0, "label": "Distance Record -2"},
+
     {"factor": "track_record", "change": -1.0, "label": "Track Record -1"},
+    {"factor": "track_record", "change": -2.0, "label": "Track Record -2"},
+
     {"factor": "track_distance", "change": -1.0, "label": "Track / Distance -1"},
+    {"factor": "track_distance", "change": -2.0, "label": "Track / Distance -2"},
 ]
 
 
@@ -244,6 +267,162 @@ def _simulation_recommendation(improvement: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "Neutral", "priority": "Medium", "message": "Simulation did not materially outperform the current model."}
 
 
+def _runner_identity(item: Dict[str, Any]) -> str:
+    return f"{item.get('meeting_id')}|{item.get('race_number')}|{item.get('runner_key') or item.get('runner_name') or item.get('tab_number')}"
+
+
+def _calculate_sensitivity_metrics(
+    grouped: Dict[str, List[Dict[str, Any]]],
+    current_weights: Dict[str, float],
+    proposed_weights: Dict[str, float],
+) -> Dict[str, Any]:
+    runner_count = 0
+    runners_score_changed = 0
+    total_abs_score_movement = 0.0
+    max_score_movement = 0.0
+
+    race_count = 0
+    races_with_top4_changed = 0
+    races_with_order_changed = 0
+    top4_entries_added = 0
+    top4_entries_removed = 0
+    winner_promoted_into_top4 = 0
+    winner_demoted_from_top4 = 0
+
+    for race_key, race_rows in grouped.items():
+        race_count += 1
+
+        current_ranked = []
+        proposed_ranked = []
+
+        for row in race_rows:
+            runner_count += 1
+            current_score = _score_runner_from_weights(row, current_weights)
+            proposed_score = _score_runner_from_weights(row, proposed_weights)
+
+            movement = round(proposed_score - current_score, 4)
+            abs_movement = abs(movement)
+
+            if abs_movement >= 0.0001:
+                runners_score_changed += 1
+
+            total_abs_score_movement += abs_movement
+            max_score_movement = max(max_score_movement, abs_movement)
+
+            current_ranked.append({**row, "simulated_score": current_score})
+            proposed_ranked.append({**row, "simulated_score": proposed_score})
+
+        current_ranked = sorted(
+            current_ranked,
+            key=lambda item: (
+                _to_float(item.get("simulated_score")),
+                -_to_float(item.get("market_price"), 9999),
+            ),
+            reverse=True,
+        )
+        proposed_ranked = sorted(
+            proposed_ranked,
+            key=lambda item: (
+                _to_float(item.get("simulated_score")),
+                -_to_float(item.get("market_price"), 9999),
+            ),
+            reverse=True,
+        )
+
+        current_top4 = current_ranked[:4]
+        proposed_top4 = proposed_ranked[:4]
+
+        current_top4_ids = [_runner_identity(item) for item in current_top4]
+        proposed_top4_ids = [_runner_identity(item) for item in proposed_top4]
+
+        current_top4_set = set(current_top4_ids)
+        proposed_top4_set = set(proposed_top4_ids)
+
+        added = proposed_top4_set - current_top4_set
+        removed = current_top4_set - proposed_top4_set
+
+        if added or removed:
+            races_with_top4_changed += 1
+
+        if current_top4_ids != proposed_top4_ids:
+            races_with_order_changed += 1
+
+        top4_entries_added += len(added)
+        top4_entries_removed += len(removed)
+
+        current_winner_ids = {
+            _runner_identity(item)
+            for item in current_ranked
+            if _to_int(item.get("actual_position")) == 1
+        }
+
+        if current_winner_ids:
+            winner_id = list(current_winner_ids)[0]
+            if winner_id in added:
+                winner_promoted_into_top4 += 1
+            if winner_id in removed:
+                winner_demoted_from_top4 += 1
+
+    avg_score_movement = (
+        round(total_abs_score_movement / runner_count, 4)
+        if runner_count
+        else 0.0
+    )
+
+    stability_index = (
+        round(((race_count - races_with_top4_changed) / race_count) * 100, 2)
+        if race_count
+        else 100.0
+    )
+
+    return {
+        "runner_count": runner_count,
+        "runners_score_changed": runners_score_changed,
+        "score_change_rate": round((runners_score_changed / runner_count) * 100, 2) if runner_count else 0.0,
+        "average_abs_score_movement": avg_score_movement,
+        "max_abs_score_movement": round(max_score_movement, 4),
+        "race_count": race_count,
+        "races_with_top4_changed": races_with_top4_changed,
+        "races_with_order_changed": races_with_order_changed,
+        "top4_entries_added": top4_entries_added,
+        "top4_entries_removed": top4_entries_removed,
+        "winner_promoted_into_top4": winner_promoted_into_top4,
+        "winner_demoted_from_top4": winner_demoted_from_top4,
+        "prediction_stability_index": stability_index,
+        "interpretation": _sensitivity_interpretation(
+            stability_index=stability_index,
+            avg_score_movement=avg_score_movement,
+            top4_changes=races_with_top4_changed,
+            winner_promoted=winner_promoted_into_top4,
+            winner_demoted=winner_demoted_from_top4,
+        ),
+    }
+
+
+def _sensitivity_interpretation(
+    stability_index: float,
+    avg_score_movement: float,
+    top4_changes: int,
+    winner_promoted: int,
+    winner_demoted: int,
+) -> str:
+    if top4_changes == 0:
+        return "Weights moved scores but did not change Top 4 selections."
+
+    if winner_promoted > winner_demoted:
+        return "Simulation promoted more winners into Top 4 than it removed."
+
+    if winner_demoted > winner_promoted:
+        return "Simulation removed more winners from Top 4 than it promoted."
+
+    if stability_index >= 95:
+        return "High stability: limited ranking movement."
+
+    if avg_score_movement < 0.5:
+        return "Low sensitivity: score movement is too small to materially change selections."
+
+    return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
+
 def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.15.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
@@ -287,6 +466,11 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "current_model": current_result,
             "simulated_model": simulated_result,
             "improvement": improvement,
+            "sensitivity": _calculate_sensitivity_metrics(
+                grouped=grouped,
+                current_weights=current_weights,
+                proposed_weights=proposed_weights,
+            ),
             "recommendation": _simulation_recommendation(improvement),
             "notes": notes,
             "safety_note": "Simulation only. No production model weights have been changed.",
@@ -377,14 +561,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.15.2 single-factor default suite",
+                notes="v2.15.4 sensitivity single-factor suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.15.2 default single-factor suite",
+                simulation_group="v2.15.4 sensitivity single-factor suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -402,6 +586,7 @@ def run_default_simulation_suite(
                     "success": result.get("success"),
                     "improvement": result.get("improvement"),
                     "recommendation": result.get("recommendation"),
+                    "sensitivity": result.get("sensitivity"),
                     "postgres_history": result.get("postgres_history"),
                 }
             )
