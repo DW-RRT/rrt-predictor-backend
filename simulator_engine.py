@@ -5,7 +5,7 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.15.0"
+SIMULATOR_VERSION = "2.15.1"
 MODEL_VERSION = "2.8.1"
 
 
@@ -73,6 +73,11 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _json_dumps(value: Any) -> str:
+    """PostgreSQL JSONB-safe serialiser for dates, datetimes and Decimal-like values."""
+    return json.dumps(value, default=str)
 
 
 def _normalise_weights(weights: Optional[Dict[str, Any]]) -> Dict[str, float]:
@@ -278,9 +283,9 @@ def save_weight_simulation(simulation: Dict[str, Any]) -> Dict[str, Any]:
         """, (
             simulation.get("simulation_id"), simulation.get("simulation_name"), simulation.get("simulator_version"), MODEL_VERSION,
             (simulation.get("dataset") or {}).get("completed_runner_rows"), (simulation.get("dataset") or {}).get("race_count"),
-            json.dumps(simulation.get("current_weights") or {}), json.dumps(simulation.get("test_weights") or {}), json.dumps(simulation.get("roughie_rules") or {}),
-            json.dumps((simulation.get("current_model") or {}).get("metrics") or {}), json.dumps((simulation.get("simulated_model") or {}).get("metrics") or {}),
-            json.dumps(simulation.get("improvement") or {}), json.dumps(simulation.get("recommendation") or {}), json.dumps(simulation), simulation.get("notes") or "",
+            _json_dumps(simulation.get("current_weights") or {}), _json_dumps(simulation.get("test_weights") or {}), _json_dumps(simulation.get("roughie_rules") or {}),
+            _json_dumps((simulation.get("current_model") or {}).get("metrics") or {}), _json_dumps((simulation.get("simulated_model") or {}).get("metrics") or {}),
+            _json_dumps(simulation.get("improvement") or {}), _json_dumps(simulation.get("recommendation") or {}), _json_dumps(simulation), simulation.get("notes") or "",
         ))
         return {"success": True, "provider": "PostgreSQL", "message": "Weight simulation saved.", "simulation_id": simulation.get("simulation_id"), "duplicate_safe": True}
     except Exception as error:
