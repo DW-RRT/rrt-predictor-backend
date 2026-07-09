@@ -106,9 +106,18 @@ from simulator_engine import (
     run_default_simulation_suite,
 )
 
+from selection_intelligence import (
+    run_selection_intelligence_analysis,
+    get_latest_selection_analysis,
+    get_selection_analysis_history,
+    get_top_misses,
+    get_factor_impact_report,
+    get_category_analysis,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.15.2",
+    version="2.16.0",
 )
 
 app.add_middleware(
@@ -813,9 +822,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.15.2",
+        "version": "2.16.0",
         "app_version": "1.0.0",
-        "backend_version": "2.15.2",
+        "backend_version": "2.16.0",
         "model_version": "2.8.1",
     }
 
@@ -826,9 +835,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.15.2",
+        "version": "2.16.0",
         "app_version": "1.0.0",
-        "backend_version": "2.15.2",
+        "backend_version": "2.16.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -881,6 +890,12 @@ def api_route_check():
         "/api/simulator/history": True,
         "/api/simulator/best": True,
         "/api/simulator/run-default-suite": True,
+        "/api/selection-intelligence/run": True,
+        "/api/selection-intelligence/latest": True,
+        "/api/selection-intelligence/history": True,
+        "/api/selection-intelligence/top-misses": True,
+        "/api/selection-intelligence/factor-impact": True,
+        "/api/selection-intelligence/category-analysis": True,
     }
 
     route_availability = {
@@ -891,11 +906,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.15.2",
+        "version": "2.16.0",
         "app_version": "1.0.0",
-        "backend_version": "2.15.2",
+        "backend_version": "2.16.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.15.2",
+        "database_schema_version": "2.16.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -960,6 +975,17 @@ def api_route_check():
                 "/api/simulator/history",
                 "/api/simulator/best",
                 "/api/simulator/run-default-suite",
+            ]
+        ),
+        "selection_intelligence_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/selection-intelligence/run",
+                "/api/selection-intelligence/latest",
+                "/api/selection-intelligence/history",
+                "/api/selection-intelligence/top-misses",
+                "/api/selection-intelligence/factor-impact",
+                "/api/selection-intelligence/category-analysis",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -1047,7 +1073,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.15.2
+# Performance Reporting Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1081,7 +1107,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.15.2
+# Performance Analytics Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1120,7 +1146,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.15.2
+# Learning Centre Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1152,13 +1178,13 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_15_2.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_16_0.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.15.2
+# Factor Capture Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1167,7 +1193,7 @@ def api_factor_capture_summary():
 
 
 # ---------------------------------------------------------------------
-# Evidence-Based Factor Analysis Routes - RRT Predictor v2.15.2
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analysis/factor-effectiveness")
@@ -1195,7 +1221,7 @@ def api_analysis_model_health():
 
 
 # ---------------------------------------------------------------------
-# Historical Weight Simulation Routes - RRT Predictor v2.15.2
+# Historical Weight Simulation Routes - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/simulator/run")
@@ -1282,6 +1308,49 @@ def api_simulator_history(limit: int = Query(20)):
 @app.get("/api/simulator/best")
 def api_simulator_best(limit: int = Query(10)):
     return get_best_simulations(limit=limit)
+
+
+
+
+# ---------------------------------------------------------------------
+# Selection Intelligence Routes - RRT Predictor v2.16.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/selection-intelligence/run")
+def api_selection_intelligence_run(
+    min_meeting_date: Optional[str] = Query(None),
+    max_meeting_date: Optional[str] = Query(None),
+):
+    return run_selection_intelligence_analysis(
+        min_meeting_date=min_meeting_date,
+        max_meeting_date=max_meeting_date,
+        save_result=True,
+    )
+
+
+@app.get("/api/selection-intelligence/latest")
+def api_selection_intelligence_latest():
+    return get_latest_selection_analysis()
+
+
+@app.get("/api/selection-intelligence/history")
+def api_selection_intelligence_history(limit: int = Query(10)):
+    return get_selection_analysis_history(limit=limit)
+
+
+@app.get("/api/selection-intelligence/top-misses")
+def api_selection_intelligence_top_misses(limit: int = Query(25)):
+    return get_top_misses(limit=limit)
+
+
+@app.get("/api/selection-intelligence/factor-impact")
+def api_selection_intelligence_factor_impact():
+    return get_factor_impact_report()
+
+
+@app.get("/api/selection-intelligence/category-analysis")
+def api_selection_intelligence_category_analysis():
+    return get_category_analysis()
 
 
 # ---------------------------------------------------------------------
@@ -1601,7 +1670,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.15.2)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.16.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1998,7 +2067,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.15.2 Single-Factor Historical Simulation Suite",
+        "source": "RRT Predictor v2.16.0 Single-Factor Historical Simulation Suite",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -2037,7 +2106,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.15.2
+# Automatic Results Processor - RRT Predictor v2.16.0
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
@@ -2054,7 +2123,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.15.2 Automatic Results Processor",
+                "source": "RRT Predictor v2.16.0 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2423,7 +2492,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.15.2 Single-Factor Historical Simulation Suite",
+            "source": "RRT Predictor v2.16.0 Single-Factor Historical Simulation Suite",
             "meeting_id": meeting_id,
             "error": str(error),
         }

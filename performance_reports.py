@@ -8,13 +8,14 @@ from database import fetch_all, fetch_one
 from factor_analysis import get_factor_effectiveness_report, get_model_health_report
 from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
+from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.15.2"
-ANALYTICS_VERSION = "2.15.2"
-DATABASE_SCHEMA_VERSION = "2.15.2"
+REPORT_VERSION = "2.16.0"
+ANALYTICS_VERSION = "2.16.0"
+DATABASE_SCHEMA_VERSION = "2.16.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.15.2"
+LEARNING_VERSION = "2.16.0"
 
 
 # ---------------------------------------------------------------------
@@ -1286,6 +1287,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "model_health": get_model_health_report(),
             "simulation_history": get_simulation_history(limit=5),
             "best_simulations": get_best_simulations(limit=5),
+            "selection_intelligence": get_latest_selection_analysis(),
             "safety_note": "This report is analysis-only. No model weights, scoring factors, or production prediction behaviour have been changed.",
         }
     except Exception as error:
@@ -1348,8 +1350,21 @@ def generate_learning_report_html() -> str:
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
+        '<h2>Selection Intelligence</h2>',
+        '<div class="note">v2.16.0 analyses why winners were missed, including Top 4 boundary misses, value/roughie winners, false positives and factor gaps. This is analysis-only.</div>',
+        _html_table(['Metric','Value'], [
+            ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
+            ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
+            ['Boundary Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('boundary_miss_rate')],
+            ['Roughie-like Winner Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('roughie_like_winner_rate')],
+            ['Average False Positives / Race', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('avg_false_positives_per_race')]
+        ]),
+        _html_table(['Priority','Area','Recommendation','Evidence'], [
+            [i.get('priority'), i.get('area'), i.get('recommendation'), i.get('evidence')]
+            for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
+        ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.15.2 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.16.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

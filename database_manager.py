@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.15.2"
+SCHEMA_VERSION = "2.16.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -217,6 +217,24 @@ def init_postgres_schema() -> Dict[str, Any]:
 
         execute_sql(
             """
+            CREATE TABLE IF NOT EXISTS rrt_selection_analysis (
+                id SERIAL PRIMARY KEY,
+                analysis_version TEXT,
+                model_version TEXT,
+                generated_at TIMESTAMPTZ DEFAULT NOW(),
+                dataset_runner_count INTEGER,
+                dataset_race_count INTEGER,
+                top4_hit_rate NUMERIC(6,2),
+                near_miss_rate NUMERIC(6,2),
+                boundary_miss_rate NUMERIC(6,2),
+                roughie_like_winner_rate NUMERIC(6,2),
+                analysis_json JSONB NOT NULL
+            );
+            """
+        )
+
+        execute_sql(
+            """
             INSERT INTO rrt_model_versions (version, description, active)
             VALUES (%s, %s, %s)
             ON CONFLICT (version)
@@ -225,8 +243,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.15.2",
-                "RRT Predictor v2.15.2 single-factor historical simulation suite. Prediction logic unchanged; simulation results are analysis-only.",
+                "2.16.0",
+                "RRT Predictor v2.16.0 selection intelligence and miss analysis. Prediction logic unchanged; analysis-only.",
                 True,
             ),
         )
@@ -244,6 +262,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_performance_snapshots",
                 "rrt_runner_factor_snapshots",
                 "rrt_weight_simulations",
+                "rrt_selection_analysis",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -306,6 +325,7 @@ def get_database_summary() -> Dict[str, Any]:
         performance_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_performance_snapshots;")
         factor_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_runner_factor_snapshots;")
         simulation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_weight_simulations;")
+        selection_analysis_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_selection_analysis;")
 
         averages = fetch_one(
             """
@@ -368,6 +388,7 @@ def get_database_summary() -> Dict[str, Any]:
                 "performance_snapshots": int((performance_count or {}).get("count") or 0),
                 "runner_factor_snapshots": int((factor_count or {}).get("count") or 0),
                 "weight_simulations": int((simulation_count or {}).get("count") or 0),
+                "selection_analysis": int((selection_analysis_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,
