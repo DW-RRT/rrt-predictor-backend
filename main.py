@@ -115,9 +115,16 @@ from selection_intelligence import (
     get_category_analysis,
 )
 
+from replay_engine import (
+    run_historical_replay,
+    get_replay_report,
+    get_replay_history,
+    get_replay_summary,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.16.0",
+    version="2.17.0",
 )
 
 app.add_middleware(
@@ -822,9 +829,9 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.16.0",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.16.0",
+        "backend_version": "2.17.0",
         "model_version": "2.8.1",
     }
 
@@ -835,9 +842,9 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.16.0",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.16.0",
+        "backend_version": "2.17.0",
         "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
@@ -896,6 +903,10 @@ def api_route_check():
         "/api/selection-intelligence/top-misses": True,
         "/api/selection-intelligence/factor-impact": True,
         "/api/selection-intelligence/category-analysis": True,
+        "/api/replay/run": True,
+        "/api/replay/report": True,
+        "/api/replay/history": True,
+        "/api/replay/summary": True,
     }
 
     route_availability = {
@@ -906,11 +917,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.16.0",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.16.0",
+        "backend_version": "2.17.0",
         "model_version": "2.8.1",
-        "database_schema_version": "2.16.0",
+        "database_schema_version": "2.17.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -986,6 +997,15 @@ def api_route_check():
                 "/api/selection-intelligence/top-misses",
                 "/api/selection-intelligence/factor-impact",
                 "/api/selection-intelligence/category-analysis",
+            ]
+        ),
+        "replay_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/replay/run",
+                "/api/replay/report",
+                "/api/replay/history",
+                "/api/replay/summary",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -1073,7 +1093,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.16.0
+# Performance Reporting Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1107,7 +1127,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.16.0
+# Performance Analytics Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1146,7 +1166,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.16.0
+# Learning Centre Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1184,7 +1204,7 @@ def api_learning_report_pdf():
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.16.0
+# Factor Capture Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1193,7 +1213,7 @@ def api_factor_capture_summary():
 
 
 # ---------------------------------------------------------------------
-# Evidence-Based Factor Analysis Routes - RRT Predictor v2.16.0
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analysis/factor-effectiveness")
@@ -1221,7 +1241,7 @@ def api_analysis_model_health():
 
 
 # ---------------------------------------------------------------------
-# Historical Weight Simulation Routes - RRT Predictor v2.16.0
+# Historical Weight Simulation Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/simulator/run")
@@ -1313,7 +1333,7 @@ def api_simulator_best(limit: int = Query(10)):
 
 
 # ---------------------------------------------------------------------
-# Selection Intelligence Routes - RRT Predictor v2.16.0
+# Selection Intelligence Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/selection-intelligence/run")
@@ -1351,6 +1371,65 @@ def api_selection_intelligence_factor_impact():
 @app.get("/api/selection-intelligence/category-analysis")
 def api_selection_intelligence_category_analysis():
     return get_category_analysis()
+
+
+# ---------------------------------------------------------------------
+# Historical Replay Engine Routes - RRT Predictor v2.17.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/replay/run")
+def api_replay_run(
+    replay_name: str = Query("v2.17.0 historical replay"),
+    min_meeting_date: Optional[str] = Query(None),
+    max_meeting_date: Optional[str] = Query(None),
+    model_version: Optional[str] = Query("2.8.1"),
+    roughie_min_price: float = Query(7.0),
+    roughie_min_market_rank: int = Query(5),
+    include_selections: bool = Query(False),
+    last10: Optional[float] = Query(None),
+    win_place: Optional[float] = Query(None),
+    track_record: Optional[float] = Query(None),
+    distance_record: Optional[float] = Query(None),
+    track_distance: Optional[float] = Query(None),
+    track_condition: Optional[float] = Query(None),
+    trainer: Optional[float] = Query(None),
+    jockey: Optional[float] = Query(None),
+    trainer_jockey: Optional[float] = Query(None),
+    barrier: Optional[float] = Query(None),
+    weight: Optional[float] = Query(None),
+    market: Optional[float] = Query(None),
+):
+    test_weights = {
+        key: value for key, value in {
+            "last10": last10, "win_place": win_place, "track_record": track_record,
+            "distance_record": distance_record, "track_distance": track_distance,
+            "track_condition": track_condition, "trainer": trainer, "jockey": jockey,
+            "trainer_jockey": trainer_jockey, "barrier": barrier, "weight": weight,
+            "market": market,
+        }.items() if value is not None
+    }
+    return run_historical_replay(
+        replay_name=replay_name, test_weights=test_weights or None,
+        min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date,
+        model_version=model_version, roughie_min_price=roughie_min_price,
+        roughie_min_market_rank=roughie_min_market_rank, save_result=True,
+        include_selections=include_selections,
+    )
+
+
+@app.get("/api/replay/report")
+def api_replay_report(replay_id: Optional[str] = Query(None)):
+    return get_replay_report(replay_id=replay_id)
+
+
+@app.get("/api/replay/history")
+def api_replay_history(limit: int = Query(20)):
+    return get_replay_history(limit=limit)
+
+
+@app.get("/api/replay/summary")
+def api_replay_summary():
+    return get_replay_summary()
 
 
 # ---------------------------------------------------------------------
@@ -1670,7 +1749,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.16.0)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.17.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -2067,7 +2146,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.16.0 Single-Factor Historical Simulation Suite",
+        "source": "RRT Predictor v2.17.0 Single-Factor Historical Simulation Suite",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -2106,7 +2185,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.16.0
+# Automatic Results Processor - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
@@ -2123,7 +2202,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.16.0 Automatic Results Processor",
+                "source": "RRT Predictor v2.17.0 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2492,7 +2571,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.16.0 Single-Factor Historical Simulation Suite",
+            "source": "RRT Predictor v2.17.0 Single-Factor Historical Simulation Suite",
             "meeting_id": meeting_id,
             "error": str(error),
         }

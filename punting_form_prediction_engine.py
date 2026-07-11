@@ -16,7 +16,7 @@ from punting_form_client import (
 
 
 MODEL_VERSION = "2.8.1"
-PREDICTION_TYPE = "RRT Predictor v2.16.0 - Punting Form Weighted Model v1.3 + Factor Capture + Selection Intelligence"
+PREDICTION_TYPE = "RRT Predictor v2.17.0 - Punting Form Weighted Model v1.3 + Factor Capture + Selection Intelligence"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,

@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.16.0"
+SCHEMA_VERSION = "2.17.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -217,6 +217,30 @@ def init_postgres_schema() -> Dict[str, Any]:
 
         execute_sql(
             """
+            CREATE TABLE IF NOT EXISTS rrt_replay_runs (
+                id SERIAL PRIMARY KEY,
+                replay_id TEXT UNIQUE NOT NULL,
+                replay_name TEXT,
+                replay_version TEXT NOT NULL,
+                model_version TEXT,
+                min_meeting_date DATE,
+                max_meeting_date DATE,
+                dataset_runner_count INTEGER,
+                dataset_race_count INTEGER,
+                dataset_meeting_count INTEGER,
+                current_weights_json JSONB,
+                replay_weights_json JSONB,
+                current_metrics_json JSONB,
+                replay_metrics_json JSONB,
+                improvement_json JSONB,
+                replay_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        execute_sql(
+            """
             CREATE TABLE IF NOT EXISTS rrt_selection_analysis (
                 id SERIAL PRIMARY KEY,
                 analysis_version TEXT,
@@ -243,8 +267,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.16.0",
-                "RRT Predictor v2.16.0 selection intelligence and miss analysis. Prediction logic unchanged; analysis-only.",
+                "2.17.0",
+                "RRT Predictor v2.17.0 historical replay engine. Production prediction logic unchanged; replay and analysis only.",
                 True,
             ),
         )
@@ -263,6 +287,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_runner_factor_snapshots",
                 "rrt_weight_simulations",
                 "rrt_selection_analysis",
+                "rrt_replay_runs",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -326,6 +351,7 @@ def get_database_summary() -> Dict[str, Any]:
         factor_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_runner_factor_snapshots;")
         simulation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_weight_simulations;")
         selection_analysis_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_selection_analysis;")
+        replay_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_replay_runs;")
 
         averages = fetch_one(
             """
@@ -389,6 +415,7 @@ def get_database_summary() -> Dict[str, Any]:
                 "runner_factor_snapshots": int((factor_count or {}).get("count") or 0),
                 "weight_simulations": int((simulation_count or {}).get("count") or 0),
                 "selection_analysis": int((selection_analysis_count or {}).get("count") or 0),
+                "replay_runs": int((replay_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,

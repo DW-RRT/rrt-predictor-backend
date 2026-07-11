@@ -11,11 +11,11 @@ from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.16.0"
-ANALYTICS_VERSION = "2.16.0"
-DATABASE_SCHEMA_VERSION = "2.16.0"
+REPORT_VERSION = "2.17.0"
+ANALYTICS_VERSION = "2.17.0"
+DATABASE_SCHEMA_VERSION = "2.17.0"
 MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.16.0"
+LEARNING_VERSION = "2.17.0"
 
 
 # ---------------------------------------------------------------------
@@ -1351,7 +1351,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">v2.16.0 analyses why winners were missed, including Top 4 boundary misses, value/roughie winners, false positives and factor gaps. This is analysis-only.</div>',
+        '<div class="note">v2.17.0 analyses why winners were missed, including Top 4 boundary misses, value/roughie winners, false positives and factor gaps. This is analysis-only.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1364,7 +1364,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.16.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.17.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
