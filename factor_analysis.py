@@ -2,8 +2,8 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.15.0"
-MODEL_VERSION = "2.8.1"
+ANALYSIS_VERSION = "2.18.0"
+MODEL_VERSION = "2.18.0"
 
 FACTOR_COLUMNS = [
     {"key": "last10", "label": "Last 10 Form", "score_column": "last10_score", "weighted_column": "weighted_last10"},
@@ -84,6 +84,7 @@ def _factor_sql(score_column: str, weighted_column: str) -> str:
                 CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END::NUMERIC AS place_flag
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
+              AND capture_scope = 'full_field'
               AND {score_column} IS NOT NULL
         )
         SELECT
@@ -118,7 +119,8 @@ def get_factor_effectiveness_report() -> Dict[str, Any]:
                 COUNT(DISTINCT meeting_date) AS date_count,
                 MIN(meeting_date) AS first_meeting_date,
                 MAX(meeting_date) AS latest_meeting_date
-            FROM rrt_runner_factor_snapshots;
+            FROM rrt_runner_factor_snapshots
+            WHERE capture_scope = 'full_field';
         """) or {}
         completed_runner_rows = _to_int(dataset.get("completed_runner_rows"))
         winner_rows = _to_int(dataset.get("winner_rows"))
@@ -161,7 +163,7 @@ def _trend_factor_group(score_column: str, meeting_ids: List[Any]) -> Dict[str, 
         WITH completed AS (
             SELECT {score_column}::NUMERIC AS score_value, CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END::NUMERIC AS place_flag
             FROM rrt_runner_factor_snapshots
-            WHERE actual_position IS NOT NULL AND {score_column} IS NOT NULL AND meeting_id IN ({placeholders})
+            WHERE actual_position IS NOT NULL AND capture_scope = 'full_field' AND {score_column} IS NOT NULL AND meeting_id IN ({placeholders})
         )
         SELECT COUNT(*) AS runner_count, ROUND(CORR(score_value, place_flag)::NUMERIC, 4) AS place_correlation FROM completed;
     """, tuple(meeting_ids)) or {}
@@ -172,7 +174,7 @@ def get_factor_trend_report(limit: int = 30) -> Dict[str, Any]:
         rows = fetch_all("""
             SELECT DISTINCT meeting_id, meeting_date
             FROM rrt_runner_factor_snapshots
-            WHERE actual_position IS NOT NULL
+            WHERE actual_position IS NOT NULL AND capture_scope = 'full_field'
             ORDER BY meeting_date DESC, meeting_id DESC
             LIMIT %s;
         """, (limit * 2,))

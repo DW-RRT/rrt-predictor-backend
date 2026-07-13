@@ -9,13 +9,14 @@ from factor_analysis import get_factor_effectiveness_report, get_model_health_re
 from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
+from learning_dataset import get_learning_dataset_audit
 
 
-REPORT_VERSION = "2.17.0"
-ANALYTICS_VERSION = "2.17.0"
-DATABASE_SCHEMA_VERSION = "2.17.0"
-MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.17.0"
+REPORT_VERSION = "2.18.0"
+ANALYTICS_VERSION = "2.18.0"
+DATABASE_SCHEMA_VERSION = "2.18.0"
+MODEL_VERSION = "2.18.0"
+LEARNING_VERSION = "2.18.0"
 
 
 # ---------------------------------------------------------------------
@@ -1120,6 +1121,7 @@ def get_each_way_leaderboards(
                 ROUND(AVG(confidence), 2) AS avg_confidence
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
+              AND capture_scope = 'full_field'
               AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
               AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
             GROUP BY NULLIF(TRIM(factor_json->>'trainer'), '')
@@ -1144,6 +1146,7 @@ def get_each_way_leaderboards(
                 ROUND(AVG(confidence), 2) AS avg_confidence
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
+              AND capture_scope = 'full_field'
               AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
               AND UPPER(TRIM(factor_json->>'jockey')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
             GROUP BY NULLIF(TRIM(factor_json->>'jockey'), '')
@@ -1172,6 +1175,7 @@ def get_each_way_leaderboards(
                 ROUND(AVG(confidence), 2) AS avg_confidence
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
+              AND capture_scope = 'full_field'
               AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
               AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
               AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
@@ -1226,7 +1230,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.15.0",
+            "leaderboard_version": "2.18.0",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
@@ -1247,7 +1251,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.15.0",
+            "leaderboard_version": "2.18.0",
             "error": str(error),
         }
 
@@ -1275,6 +1279,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
                 "recommendation": _learning_recommendation(base.get("confidence"), bool(base.get("ready_for_learning"))),
             },
             "dataset": base.get("summary"),
+            "learning_dataset_audit": get_learning_dataset_audit(),
             "head_to_head": base.get("head_to_head"),
             "strengths": _learning_strengths(base, tracks, dates),
             "weaknesses": _learning_weaknesses(base, tracks, dates),
@@ -1307,6 +1312,9 @@ def generate_learning_report_html() -> str:
     if not report.get("success"):
         return "<html><body><h1>RRT Predictor Learning Report</h1><pre>" + escape(str(report)) + "</pre></body></html>"
     dataset = report.get("dataset") or {}
+    audit = report.get("learning_dataset_audit") or {}
+    comparison = audit.get("prediction_comparison") or {}
+    legacy = audit.get("legacy_partial_capture") or {}
     status = report.get("learning_status") or {}
     h2h = report.get("head_to_head") or {}
     tracks = report.get("track_sets") or {}
@@ -1321,9 +1329,10 @@ def generate_learning_report_html() -> str:
         f'<h1>RRT Predictor Learning Report</h1><p class="subtitle">Version {LEARNING_VERSION} | Generated {escape(report.get("generated_at") or "")}</p>',
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Analysis Only: No model weights changed</span>',
         '<h2>Dataset Audit</h2><div class="grid">',
-        card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
-        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
+        card('Archive Meetings', dataset.get('meeting_count')), card('Archive Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
+        card('Valid Replay Meetings', comparison.get('meeting_count')), card('Valid Replay Races', comparison.get('race_count')), card('Valid Replay Runners', comparison.get('runner_count')), card('Race Coverage', _pct(comparison.get('race_coverage_pct'))),
         '</div>',
+        f'<div class="note"><strong>Data integrity rule:</strong> Replay, simulation and selection intelligence use only full-field pre-race captures. Official results are outcome labels only. Legacy selected-runner captures excluded: {escape(str(legacy.get("race_count") or 0))} races.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
@@ -1348,10 +1357,10 @@ def generate_learning_report_html() -> str:
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Historical Weight Simulation</h2>',
-        '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
+        '<div class="note">v2.18.0 simulations use only complete pre-race full-field captures. Result-derived or selected-runner-only rows are excluded.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">v2.17.0 analyses why winners were missed, including Top 4 boundary misses, value/roughie winners, false positives and factor gaps. This is analysis-only.</div>',
+        '<div class="note">v2.18.0 selection intelligence compares the original pre-race full-field ranking with official outcomes. Results are never used to create the ranking.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1364,7 +1373,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.17.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.18.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

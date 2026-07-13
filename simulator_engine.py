@@ -3,82 +3,33 @@ import json
 import uuid
 
 from database import fetch_all, fetch_one, execute_sql
+from learning_dataset import get_learning_dataset_audit, load_learning_rows
 
 
-SIMULATOR_VERSION = "2.15.4"
-MODEL_VERSION = "2.8.1"
+SIMULATOR_VERSION = "2.18.0"
+MODEL_VERSION = "2.18.0"
 
 
 CURRENT_MODEL_WEIGHTS = {
-    "last10": 14.0,
-    "win_place": 8.0,
-    "track_record": 8.0,
-    "distance_record": 8.0,
-    "track_distance": 8.0,
-    "track_condition": 8.0,
-    "trainer": 7.0,
-    "jockey": 7.0,
-    "trainer_jockey": 10.0,
-    "barrier": 5.0,
-    "weight": 5.0,
-    "market": 12.0,
+    "last10": 0.15, "win_place": 0.08, "track_record": 0.08,
+    "distance_record": 0.09, "track_distance": 0.09, "track_condition": 0.12,
+    "trainer": 0.10, "jockey": 0.08, "trainer_jockey": 0.12,
+    "barrier": 0.04, "weight": 0.02, "market": 0.03,
 }
 
 
-DEFAULT_TEST_WEIGHTS = {
-    "last10": 15.0,
-    "win_place": 9.0,
-    "track_record": 7.0,
-    "distance_record": 7.0,
-    "track_distance": 7.0,
-    "track_condition": 7.0,
-    "trainer": 6.0,
-    "jockey": 7.0,
-    "trainer_jockey": 9.0,
-    "barrier": 4.0,
-    "weight": 5.0,
-    "market": 14.0,
-}
+DEFAULT_TEST_WEIGHTS = {**CURRENT_MODEL_WEIGHTS, "market": 0.04, "weight": 0.01}
+
 
 
 DEFAULT_SINGLE_FACTOR_SUITE = [
-    {"factor": "market", "change": 1.0, "label": "Market +1"},
-    {"factor": "market", "change": 2.0, "label": "Market +2"},
-    {"factor": "market", "change": 3.0, "label": "Market +3"},
-    {"factor": "market", "change": 4.0, "label": "Market +4"},
-
-    {"factor": "win_place", "change": 1.0, "label": "Win / Place +1"},
-    {"factor": "win_place", "change": 2.0, "label": "Win / Place +2"},
-
-    {"factor": "last10", "change": 1.0, "label": "Last 10 +1"},
-    {"factor": "last10", "change": 2.0, "label": "Last 10 +2"},
-
-    {"factor": "barrier", "change": 1.0, "label": "Barrier +1"},
-    {"factor": "barrier", "change": 2.0, "label": "Barrier +2"},
-
-    {"factor": "weight", "change": -1.0, "label": "Weight -1"},
-    {"factor": "weight", "change": -2.0, "label": "Weight -2"},
-    {"factor": "weight", "change": -3.0, "label": "Weight -3"},
-    {"factor": "weight", "change": -4.0, "label": "Weight -4"},
-
-    {"factor": "trainer", "change": -1.0, "label": "Trainer -1"},
-    {"factor": "trainer", "change": -2.0, "label": "Trainer -2"},
-
-    {"factor": "trainer_jockey", "change": -1.0, "label": "Trainer / Jockey -1"},
-    {"factor": "trainer_jockey", "change": -2.0, "label": "Trainer / Jockey -2"},
-
-    {"factor": "track_condition", "change": -1.0, "label": "Track Condition -1"},
-    {"factor": "track_condition", "change": -2.0, "label": "Track Condition -2"},
-
-    {"factor": "distance_record", "change": -1.0, "label": "Distance Record -1"},
-    {"factor": "distance_record", "change": -2.0, "label": "Distance Record -2"},
-
-    {"factor": "track_record", "change": -1.0, "label": "Track Record -1"},
-    {"factor": "track_record", "change": -2.0, "label": "Track Record -2"},
-
-    {"factor": "track_distance", "change": -1.0, "label": "Track / Distance -1"},
-    {"factor": "track_distance", "change": -2.0, "label": "Track / Distance -2"},
+    {"factor": "market", "change": 0.01, "label": "Market +0.01"},
+    {"factor": "market", "change": 0.02, "label": "Market +0.02"},
+    {"factor": "win_place", "change": 0.01, "label": "Win / Place +0.01"},
+    {"factor": "last10", "change": 0.01, "label": "Last 10 +0.01"},
+    {"factor": "weight", "change": -0.01, "label": "Weight -0.01"},
 ]
+
 
 
 FACTOR_SCORE_COLUMNS = {
@@ -142,27 +93,7 @@ def _score_runner_from_weights(row: Dict[str, Any], weights: Dict[str, float]) -
 
 
 def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None) -> List[Dict[str, Any]]:
-    where_parts = ["actual_position IS NOT NULL", "race_number IS NOT NULL", "meeting_id IS NOT NULL"]
-    params: List[Any] = []
-    if min_meeting_date:
-        where_parts.append("meeting_date >= %s")
-        params.append(min_meeting_date)
-    if max_meeting_date:
-        where_parts.append("meeting_date <= %s")
-        params.append(max_meeting_date)
-    where_sql = " AND ".join(where_parts)
-    return fetch_all(f"""
-        SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
-               runner_key, runner_name, tab_number, final_score, confidence,
-               market_price, market_rank, last10_score, win_place_score,
-               track_record_score, distance_record_score, track_distance_record_score,
-               track_condition_score, trainer_score, jockey_score, trainer_jockey_score,
-               barrier_score, weight_score, market_score, actual_position, actual_price,
-               hit_win, hit_place, factor_json
-        FROM rrt_runner_factor_snapshots
-        WHERE {where_sql}
-        ORDER BY meeting_date ASC, meeting_id ASC, race_number ASC, runner_name ASC;
-    """, tuple(params))
+    return load_learning_rows(min_meeting_date, max_meeting_date, model_version=None)
 
 
 def _group_by_race(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -423,7 +354,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.15.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.18.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
@@ -459,7 +390,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "change_amount": change_amount,
             "analysis_only": True,
             "prediction_model_changed": False,
-            "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
+            "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "audit": get_learning_dataset_audit(), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
             "roughie_rules": {"current_baseline": {"min_price": 10.0, "min_market_rank": 6, "min_score": 45.0}, "simulated": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}},
             "current_weights": current_weights,
             "test_weights": proposed_weights,
@@ -513,7 +444,7 @@ def get_simulation_history(limit: int=20) -> Dict[str, Any]:
         rows = fetch_all("""
             SELECT simulation_id, simulation_name, simulator_version, model_version, dataset_runner_count, dataset_race_count,
                    current_metrics_json, simulated_metrics_json, improvement_json, recommendation_json, notes, created_at
-            FROM rrt_weight_simulations ORDER BY created_at DESC LIMIT %s;
+            FROM rrt_weight_simulations WHERE simulator_version = '2.18.0' ORDER BY created_at DESC LIMIT %s;
         """, (limit,))
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "simulation_history", "limit": limit, "simulation_count": len(rows), "simulations": rows}
     except Exception as error:
@@ -530,6 +461,7 @@ def get_best_simulations(limit: int=10) -> Dict[str, Any]:
                    ROUND((improvement_json->>'roughie_strike_rate')::NUMERIC, 2) AS roughie_improvement,
                    recommendation_json, notes, created_at
             FROM rrt_weight_simulations
+            WHERE simulator_version = '2.18.0'
             ORDER BY overall_improvement DESC, roughie_improvement DESC LIMIT %s;
         """, (limit,))
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "best_simulations", "limit": limit, "simulation_count": len(rows), "simulations": rows}
@@ -561,14 +493,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.15.4 sensitivity single-factor suite",
+                notes="v2.18.0 sensitivity single-factor suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.15.4 sensitivity single-factor suite",
+                simulation_group="v2.18.0 sensitivity single-factor suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,

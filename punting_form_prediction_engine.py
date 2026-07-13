@@ -15,8 +15,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.8.1"
-PREDICTION_TYPE = "RRT Predictor v2.17.0 - Punting Form Weighted Model v1.3 + Factor Capture + Selection Intelligence"
+MODEL_VERSION = "2.18.0"
+PREDICTION_TYPE = "RRT Predictor v2.18.0 - Punting Form Weighted Model v1.3 + Full-Field Factor Capture"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -1244,6 +1244,19 @@ def predict_from_form_data(
         reverse=True,
     )
 
+    race_field_sizes = {}
+    for race in eligible_races:
+        race_key = race.get("race_id") or race.get("race_number")
+        race_field_sizes[race_key] = len([runner for runner in race.get("runners", []) if is_valid_runner(runner)])
+
+    race_rank_counters = {}
+    for runner in all_ranked:
+        race_key = runner.get("race_id") or runner.get("race_number")
+        race_rank_counters[race_key] = race_rank_counters.get(race_key, 0) + 1
+        runner["prediction_rank"] = race_rank_counters[race_key]
+        runner["field_size"] = race_field_sizes.get(race_key, 0)
+        runner["capture_scope"] = "full_field"
+
     if not all_ranked:
         return {
             "success": False,
@@ -1341,6 +1354,18 @@ def predict_from_form_data(
                 "Roughies require price >= 10, price > 0 and market rank >= 6. "
                 "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
+        },
+        "factor_capture": {
+            "version": "2.18.0",
+            "status": "full_field",
+            "capture_scope": "full_field",
+            "runner_count": len(all_ranked),
+            "race_count": len(eligible_races),
+            "runners": [build_factor_capture_runner(runner) | {
+                "prediction_rank": runner.get("prediction_rank"),
+                "field_size": runner.get("field_size"),
+                "capture_scope": "full_field",
+            } for runner in all_ranked],
         },
         "predictions": {
             "top_4_win_bets": [
