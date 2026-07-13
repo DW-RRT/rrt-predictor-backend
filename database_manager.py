@@ -259,6 +259,13 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
         )
 
+        # Upgrade existing learning-cycle tables created by earlier v2.18.x builds.
+        # CREATE TABLE IF NOT EXISTS does not add newly introduced columns.
+        execute_sql("ALTER TABLE rrt_learning_cycles ADD COLUMN IF NOT EXISTS factor_report_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
+        execute_sql("ALTER TABLE rrt_learning_cycles ADD COLUMN IF NOT EXISTS weight_report_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
+        execute_sql("ALTER TABLE rrt_learning_cycles ADD COLUMN IF NOT EXISTS simulation_report_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
+        execute_sql("ALTER TABLE rrt_learning_cycles ADD COLUMN IF NOT EXISTS selection_report_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
+
         execute_sql(
             """
             CREATE TABLE IF NOT EXISTS rrt_factor_recommendations (
