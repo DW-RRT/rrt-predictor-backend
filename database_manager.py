@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.18.0"
+SCHEMA_VERSION = "2.18.1"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -309,8 +309,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.18.0",
-                "RRT Predictor v2.18.0 unified pre-race learning dataset and full-field factor capture.",
+                "2.18.1",
+                "RRT Predictor v2.18.1 unified pre-race learning dataset and full-field factor capture.",
                 True,
             ),
         )

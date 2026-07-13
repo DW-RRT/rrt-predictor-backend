@@ -15,8 +15,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.18.0"
-PREDICTION_TYPE = "RRT Predictor v2.18.0 - Punting Form Weighted Model v1.3 + Full-Field Factor Capture"
+MODEL_VERSION = "2.18.1"
+PREDICTION_TYPE = "RRT Predictor v2.18.1 - Punting Form Weighted Model v1.3 + Full-Field Factor Capture"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -1356,7 +1356,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.18.0",
+            "version": "2.18.1",
             "status": "full_field",
             "capture_scope": "full_field",
             "runner_count": len(all_ranked),

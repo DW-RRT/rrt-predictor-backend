@@ -6,8 +6,8 @@ from database import fetch_all, fetch_one, execute_sql
 from learning_dataset import get_learning_dataset_audit, load_learning_rows
 
 
-SIMULATOR_VERSION = "2.18.0"
-MODEL_VERSION = "2.18.0"
+SIMULATOR_VERSION = "2.18.1"
+MODEL_VERSION = "2.18.1"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -354,7 +354,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.18.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.18.1 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
@@ -362,6 +362,17 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
     change_amount: Optional[float] = None) -> Dict[str, Any]:
     try:
         rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
+        if not rows:
+            return {
+                "success": False,
+                "provider": "RRT Predictor",
+                "simulator_version": SIMULATOR_VERSION,
+                "analysis_only": True,
+                "prediction_model_changed": False,
+                "message": "Simulation not run: no valid full-field pre-race rows with official outcomes are available.",
+                "dataset": {"completed_runner_rows": 0, "race_count": 0, "audit": get_learning_dataset_audit()},
+                "next_step": "Run /api/learning-dataset/reconstruct and collect new full-field prediction captures.",
+            }
         grouped = _group_by_race(rows)
         current_weights = _normalise_weights(CURRENT_MODEL_WEIGHTS)
         proposed_weights = _normalise_weights(test_weights or DEFAULT_TEST_WEIGHTS)
@@ -444,7 +455,7 @@ def get_simulation_history(limit: int=20) -> Dict[str, Any]:
         rows = fetch_all("""
             SELECT simulation_id, simulation_name, simulator_version, model_version, dataset_runner_count, dataset_race_count,
                    current_metrics_json, simulated_metrics_json, improvement_json, recommendation_json, notes, created_at
-            FROM rrt_weight_simulations WHERE simulator_version = '2.18.0' ORDER BY created_at DESC LIMIT %s;
+            FROM rrt_weight_simulations WHERE simulator_version = '2.18.1' ORDER BY created_at DESC LIMIT %s;
         """, (limit,))
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "simulation_history", "limit": limit, "simulation_count": len(rows), "simulations": rows}
     except Exception as error:
@@ -461,7 +472,7 @@ def get_best_simulations(limit: int=10) -> Dict[str, Any]:
                    ROUND((improvement_json->>'roughie_strike_rate')::NUMERIC, 2) AS roughie_improvement,
                    recommendation_json, notes, created_at
             FROM rrt_weight_simulations
-            WHERE simulator_version = '2.18.0'
+            WHERE simulator_version = '2.18.1'
             ORDER BY overall_improvement DESC, roughie_improvement DESC LIMIT %s;
         """, (limit,))
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "best_simulations", "limit": limit, "simulation_count": len(rows), "simulations": rows}
@@ -493,14 +504,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.18.0 sensitivity single-factor suite",
+                notes="v2.18.1 sensitivity single-factor suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.18.0 sensitivity single-factor suite",
+                simulation_group="v2.18.1 sensitivity single-factor suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,

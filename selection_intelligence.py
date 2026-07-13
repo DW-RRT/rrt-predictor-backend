@@ -6,8 +6,8 @@ from database import fetch_all, fetch_one, execute_sql
 from learning_dataset import get_learning_dataset_audit, load_learning_rows
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.18.0"
-MODEL_VERSION = "2.18.0"
+SELECTION_INTELLIGENCE_VERSION = "2.18.1"
+MODEL_VERSION = "2.18.1"
 
 
 FACTOR_COLUMNS = [
@@ -335,6 +335,18 @@ def run_selection_intelligence_analysis(
 ) -> Dict[str, Any]:
     try:
         rows = _load_completed_rows(min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date)
+        if not rows:
+            return {
+                "success": False,
+                "provider": "RRT Predictor",
+                "selection_intelligence_version": SELECTION_INTELLIGENCE_VERSION,
+                "report": "selection_intelligence",
+                "analysis_only": True,
+                "prediction_model_changed": False,
+                "message": "Selection intelligence not run: no valid full-field pre-race rows with official outcomes are available.",
+                "dataset": {"runner_rows": 0, "race_count": 0, "audit": get_learning_dataset_audit()},
+                "next_step": "Run /api/learning-dataset/reconstruct and collect new full-field prediction captures.",
+            }
         grouped = _group_by_race(rows)
         race_analyses = []
         for race_key, race_rows in grouped.items():
@@ -469,7 +481,7 @@ def get_selection_analysis_history(limit: int = 10) -> Dict[str, Any]:
 
 def get_latest_selection_analysis() -> Dict[str, Any]:
     try:
-        row = fetch_one("SELECT analysis_json FROM rrt_selection_analysis WHERE analysis_version = '2.18.0' ORDER BY generated_at DESC LIMIT 1;")
+        row = fetch_one("SELECT analysis_json FROM rrt_selection_analysis WHERE analysis_version = '2.18.1' ORDER BY generated_at DESC LIMIT 1;")
         if not row:
             return run_selection_intelligence_analysis(save_result=True)
         analysis = row.get("analysis_json") or {}

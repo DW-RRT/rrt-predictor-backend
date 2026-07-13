@@ -9,8 +9,8 @@ from factor_analysis import get_factor_effectiveness_report
 from adaptive_weight_recommendations import get_weight_recommendations
 from replay_engine import run_historical_replay
 
-LEARNING_VERSION = "2.18.0"
-MODEL_VERSION = "2.18.0"
+LEARNING_VERSION = "2.18.1"
+MODEL_VERSION = "2.18.1"
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -39,9 +39,22 @@ def _status(confidence: float, expected_improvement: float, change: float) -> st
     return "Reject"
 
 
-def run_adaptive_learning_cycle(cycle_name: str = "v2.18.0 adaptive learning cycle", save_result: bool = True) -> Dict[str, Any]:
+def run_adaptive_learning_cycle(cycle_name: str = "v2.18.1 adaptive learning cycle", save_result: bool = True) -> Dict[str, Any]:
     try:
         audit = get_learning_dataset_audit()
+        comparison = audit.get("prediction_comparison") or {}
+        if int(comparison.get("race_count") or 0) <= 0 or int(comparison.get("runner_count") or 0) <= 0:
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "learning_version": LEARNING_VERSION,
+                "model_version": MODEL_VERSION,
+                "analysis_only": True,
+                "production_weights_changed": False,
+                "message": "Adaptive learning not run: no valid full-field pre-race learning rows are available.",
+                "dataset_audit": audit,
+                "next_step": "Run /api/learning-dataset/reconstruct, then collect new v2.18.1 full-field predictions and official results.",
+            }
         factors = get_factor_effectiveness_report()
         weights = get_weight_recommendations()
         if not factors.get("success") or not weights.get("success"):

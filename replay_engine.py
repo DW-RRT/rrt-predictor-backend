@@ -6,8 +6,8 @@ import uuid
 from database import execute_sql, fetch_all, fetch_one
 from learning_dataset import get_learning_dataset_audit, group_learning_rows, load_learning_rows
 
-REPLAY_VERSION = "2.18.0"
-MODEL_VERSION = "2.18.0"
+REPLAY_VERSION = "2.18.1"
+MODEL_VERSION = "2.18.1"
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "last10": 0.15, "win_place": 0.08, "track_record": 0.08,
@@ -87,7 +87,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
     }
 
 
-def run_historical_replay(replay_name: str = "v2.18.0 historical replay", test_weights: Optional[Dict[str, Any]] = None,
+def run_historical_replay(replay_name: str = "v2.18.1 historical replay", test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None, max_meeting_date: Optional[str] = None,
     model_version: Optional[str] = None, roughie_min_price: float = 7.0,
     roughie_min_market_rank: int = 5, save_result: bool = True,
@@ -95,6 +95,18 @@ def run_historical_replay(replay_name: str = "v2.18.0 historical replay", test_w
     try:
         weights = _normalise_weights(test_weights)
         rows = load_learning_rows(min_meeting_date, max_meeting_date, model_version)
+        if not rows:
+            return {
+                "success": False,
+                "provider": "PostgreSQL",
+                "replay_version": REPLAY_VERSION,
+                "model_version": model_version or "all_full_field_models",
+                "analysis_only": True,
+                "production_weights_changed": False,
+                "message": "Replay not run: no valid full-field pre-race rows with official outcomes are available.",
+                "dataset": {"runner_count": 0, "race_count": 0, "meeting_count": 0, "audit": get_learning_dataset_audit()},
+                "next_step": "Run /api/learning-dataset/reconstruct and collect new full-field prediction captures.",
+            }
         groups = group_learning_rows(rows)
         for row in rows:
             row["replay_score"] = _score(row, weights)
@@ -157,6 +169,6 @@ def get_replay_summary() -> Dict[str, Any]:
         ROUND(AVG((improvement_json->>'top1_win_strike_rate')::numeric),2) AS avg_top1_improvement,
         ROUND(AVG((improvement_json->>'top4_win_strike_rate')::numeric),2) AS avg_top4_win_improvement,
         ROUND(AVG((improvement_json->>'top4_place_strike_rate')::numeric),2) AS avg_top4_place_improvement
-        FROM rrt_replay_runs WHERE replay_version='2.18.0';""") or {}
+        FROM rrt_replay_runs WHERE replay_version='2.18.1';""") or {}
     return {"success": True, "provider": "PostgreSQL", "replay_version": REPLAY_VERSION, "summary": row,
             "dataset_audit": get_learning_dataset_audit(), "analysis_only": True, "production_weights_changed": False}
