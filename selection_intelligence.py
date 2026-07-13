@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.16.0"
-MODEL_VERSION = "2.8.1"
+SELECTION_INTELLIGENCE_VERSION = "2.18.3"
+MODEL_VERSION = "2.18.3"
 
 
 FACTOR_COLUMNS = [

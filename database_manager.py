@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.17.0"
+SCHEMA_VERSION = "2.18.3"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -241,6 +241,52 @@ def init_postgres_schema() -> Dict[str, Any]:
 
         execute_sql(
             """
+            CREATE TABLE IF NOT EXISTS rrt_learning_cycles (
+                id SERIAL PRIMARY KEY,
+                cycle_id TEXT UNIQUE NOT NULL,
+                cycle_name TEXT,
+                learning_version TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                dataset_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                factor_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                weight_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                simulation_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                selection_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                recommendations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                cycle_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_factor_recommendations (
+                id SERIAL PRIMARY KEY,
+                cycle_id TEXT NOT NULL,
+                factor TEXT NOT NULL,
+                current_weight NUMERIC,
+                recommended_weight NUMERIC,
+                change_amount NUMERIC,
+                expected_improvement NUMERIC,
+                confidence_pct NUMERIC(6,2),
+                status TEXT,
+                rationale TEXT,
+                recommendation_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        execute_sql(
+            """
+            CREATE INDEX IF NOT EXISTS ix_rrt_factor_recommendations_cycle
+            ON rrt_factor_recommendations (cycle_id);
+            """
+        )
+
+        execute_sql(
+            """
             CREATE TABLE IF NOT EXISTS rrt_selection_analysis (
                 id SERIAL PRIMARY KEY,
                 analysis_version TEXT,
@@ -267,8 +313,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.17.0",
-                "RRT Predictor v2.17.0 historical replay engine. Production prediction logic unchanged; replay and analysis only.",
+                "2.18.3",
+                "RRT Predictor v2.18.3 native full-field capture and adaptive learning integration. Historical learning retained; production weights unchanged automatically.",
                 True,
             ),
         )
@@ -288,6 +334,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_weight_simulations",
                 "rrt_selection_analysis",
                 "rrt_replay_runs",
+                "rrt_learning_cycles",
+                "rrt_factor_recommendations",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -352,6 +400,8 @@ def get_database_summary() -> Dict[str, Any]:
         simulation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_weight_simulations;")
         selection_analysis_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_selection_analysis;")
         replay_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_replay_runs;")
+        learning_cycle_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_learning_cycles;")
+        factor_recommendation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_factor_recommendations;")
 
         averages = fetch_one(
             """
@@ -416,6 +466,8 @@ def get_database_summary() -> Dict[str, Any]:
                 "weight_simulations": int((simulation_count or {}).get("count") or 0),
                 "selection_analysis": int((selection_analysis_count or {}).get("count") or 0),
                 "replay_runs": int((replay_count or {}).get("count") or 0),
+                "learning_cycles": int((learning_cycle_count or {}).get("count") or 0),
+                "factor_recommendations": int((factor_recommendation_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,
@@ -537,7 +589,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.8.1",
+    model_version: str = "2.18.3",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -1218,7 +1270,8 @@ def get_factor_capture_summary() -> Dict[str, Any]:
             "factor_averages": factor_averages,
             "winner_averages": winner_averages,
             "latest_meetings": latest,
-            "analysis_note": "Factor capture is observational only. Prediction weights are unchanged.",
+            "capture_scope": "native_full_field",
+            "analysis_note": "All eligible future runners are captured natively before results. Historical factor learning remains valid and production weights are unchanged automatically.",
         }
 
     except Exception as error:

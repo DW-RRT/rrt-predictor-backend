@@ -15,8 +15,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.8.1"
-PREDICTION_TYPE = "RRT Predictor v2.17.0 - Punting Form Weighted Model v1.3 + Factor Capture + Selection Intelligence"
+MODEL_VERSION = "2.18.3"
+PREDICTION_TYPE = "RRT Predictor v2.18.3 - Native Full-Field Capture + Adaptive Learning Integration"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -1259,7 +1259,8 @@ def predict_from_form_data(
             "scoring_weights": SCORING_WEIGHTS,
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.12.0",
+                "version": "2.18.3",
+                "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
                 "runners": [],
@@ -1341,6 +1342,14 @@ def predict_from_form_data(
                 "Roughies require price >= 10, price > 0 and market rank >= 6. "
                 "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
+        },
+        "factor_capture": {
+            "version": "2.18.3",
+            "capture_scope": "native_full_field",
+            "status": "captured",
+            "runner_count": len(all_ranked),
+            "race_count": len({str(runner.get("race_id") or runner.get("race_number")) for runner in all_ranked}),
+            "runners": [build_factor_capture_runner(runner) for runner in all_ranked],
         },
         "predictions": {
             "top_4_win_bets": [

@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.15.4"
-MODEL_VERSION = "2.8.1"
+SIMULATOR_VERSION = "2.18.3"
+MODEL_VERSION = "2.18.3"
 
 
 CURRENT_MODEL_WEIGHTS = {

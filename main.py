@@ -122,9 +122,17 @@ from replay_engine import (
     get_replay_summary,
 )
 
+from adaptive_learning_engine import (
+    run_adaptive_learning_cycle,
+    get_learning_cycle_report,
+    get_learning_cycle_history,
+    get_learning_recommendation_history,
+    get_adaptive_learning_summary,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.17.0",
+    version="2.18.3",
 )
 
 app.add_middleware(
@@ -829,10 +837,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.17.0",
+        "version": "2.18.3",
         "app_version": "1.0.0",
-        "backend_version": "2.17.0",
-        "model_version": "2.8.1",
+        "backend_version": "2.18.3",
+        "model_version": "2.18.3",
     }
 
 
@@ -842,10 +850,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.17.0",
+        "version": "2.18.3",
         "app_version": "1.0.0",
-        "backend_version": "2.17.0",
-        "model_version": "2.8.1",
+        "backend_version": "2.18.3",
+        "model_version": "2.18.3",
         "cache_ttl_seconds": 300
     }
 
@@ -907,6 +915,11 @@ def api_route_check():
         "/api/replay/report": True,
         "/api/replay/history": True,
         "/api/replay/summary": True,
+        "/api/adaptive-learning/run": True,
+        "/api/adaptive-learning/report": True,
+        "/api/adaptive-learning/history": True,
+        "/api/adaptive-learning/recommendations": True,
+        "/api/adaptive-learning/summary": True,
     }
 
     route_availability = {
@@ -917,11 +930,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.17.0",
+        "version": "2.18.3",
         "app_version": "1.0.0",
-        "backend_version": "2.17.0",
-        "model_version": "2.8.1",
-        "database_schema_version": "2.17.0",
+        "backend_version": "2.18.3",
+        "model_version": "2.18.3",
+        "database_schema_version": "2.18.3",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -1006,6 +1019,16 @@ def api_route_check():
                 "/api/replay/report",
                 "/api/replay/history",
                 "/api/replay/summary",
+            ]
+        ),
+        "adaptive_learning_routes_available": all(
+            route_availability.get(route)
+            for route in [
+                "/api/adaptive-learning/run",
+                "/api/adaptive-learning/report",
+                "/api/adaptive-learning/history",
+                "/api/adaptive-learning/recommendations",
+                "/api/adaptive-learning/summary",
             ]
         ),
         "historical_import_available": route_availability.get("/api/import-historical-performance"),
@@ -1198,7 +1221,7 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_16_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_18_3.pdf"
         },
     )
 
@@ -1371,6 +1394,37 @@ def api_selection_intelligence_factor_impact():
 @app.get("/api/selection-intelligence/category-analysis")
 def api_selection_intelligence_category_analysis():
     return get_category_analysis()
+
+
+# ---------------------------------------------------------------------
+# Native Adaptive Learning Routes - RRT Predictor v2.18.3
+# ---------------------------------------------------------------------
+
+@app.get("/api/adaptive-learning/run")
+def api_adaptive_learning_run(
+    cycle_name: str = Query("v2.18.3 native adaptive learning cycle"),
+):
+    return run_adaptive_learning_cycle(cycle_name=cycle_name, save_result=True)
+
+
+@app.get("/api/adaptive-learning/report")
+def api_adaptive_learning_report(cycle_id: Optional[str] = Query(None)):
+    return get_learning_cycle_report(cycle_id=cycle_id)
+
+
+@app.get("/api/adaptive-learning/history")
+def api_adaptive_learning_history(limit: int = Query(20)):
+    return get_learning_cycle_history(limit=limit)
+
+
+@app.get("/api/adaptive-learning/recommendations")
+def api_adaptive_learning_recommendations(limit: int = Query(100)):
+    return get_learning_recommendation_history(limit=limit)
+
+
+@app.get("/api/adaptive-learning/summary")
+def api_adaptive_learning_summary():
+    return get_adaptive_learning_summary()
 
 
 # ---------------------------------------------------------------------
@@ -1884,7 +1938,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.8.1",
+        "model_version": "2.18.3",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2195,7 +2249,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
     if not prediction_snapshot:
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
-            model_version="2.8.1",
+            model_version="2.18.3",
         )
 
         if not postgres_prediction.get("success"):
@@ -2479,7 +2533,7 @@ def api_punting_form_predict(
                 "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
                 "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
                 "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.14.0 PostgreSQL-backed evidence-based factor analysis, automatic results processing, and persistent learning.",
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.18.3 native full-field PostgreSQL factor analysis, automatic results processing, and persistent learning.",
             }
 
         return prediction_response

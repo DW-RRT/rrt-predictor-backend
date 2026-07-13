@@ -11,11 +11,11 @@ from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.17.0"
-ANALYTICS_VERSION = "2.17.0"
-DATABASE_SCHEMA_VERSION = "2.17.0"
-MODEL_VERSION = "2.8.1"
-LEARNING_VERSION = "2.17.0"
+REPORT_VERSION = "2.18.3"
+ANALYTICS_VERSION = "2.18.3"
+DATABASE_SCHEMA_VERSION = "2.18.3"
+MODEL_VERSION = "2.18.3"
+LEARNING_VERSION = "2.18.3"
 
 
 # ---------------------------------------------------------------------
