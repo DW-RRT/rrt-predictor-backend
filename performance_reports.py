@@ -9,14 +9,14 @@ from factor_analysis import get_factor_effectiveness_report, get_model_health_re
 from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
-from learning_dataset import get_learning_dataset_audit
+from learning_dataset import get_learning_dataset_audit, inspect_prediction_archive
 
 
-REPORT_VERSION = "2.18.1"
-ANALYTICS_VERSION = "2.18.1"
-DATABASE_SCHEMA_VERSION = "2.18.1"
-MODEL_VERSION = "2.18.1"
-LEARNING_VERSION = "2.18.1"
+REPORT_VERSION = "2.18.2"
+ANALYTICS_VERSION = "2.18.2"
+DATABASE_SCHEMA_VERSION = "2.18.2"
+MODEL_VERSION = "2.18.2"
+LEARNING_VERSION = "2.18.2"
 
 
 # ---------------------------------------------------------------------
@@ -1230,7 +1230,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.18.1",
+            "leaderboard_version": "2.18.2",
             "generated_at": _now_utc_iso(),
             "minimum_runners": min_runners,
             "limit": limit,
@@ -1251,7 +1251,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.18.1",
+            "leaderboard_version": "2.18.2",
             "error": str(error),
         }
 
@@ -1296,6 +1296,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             },
             "dataset": base.get("summary"),
             "learning_dataset_audit": audit,
+            "prediction_archive_inspection": inspect_prediction_archive(limit=1000, include_samples=False),
             "head_to_head": base.get("head_to_head"),
             "strengths": _learning_strengths(base, tracks, dates),
             "weaknesses": _learning_weaknesses(base, tracks, dates),
@@ -1332,6 +1333,10 @@ def generate_learning_report_html() -> str:
     comparison = audit.get("prediction_comparison") or {}
     reconstruction = audit.get("reconstruction") or {}
     legacy = audit.get("legacy_partial_capture") or {}
+    inspection = report.get("prediction_archive_inspection") or {}
+    inspection_summary = inspection.get("summary") or {}
+    inspection_paths = inspection.get("runner_paths") or []
+    inspection_formats = inspection.get("formats") or []
     status = report.get("learning_status") or {}
     h2h = report.get("head_to_head") or {}
     tracks = report.get("track_sets") or {}
@@ -1363,6 +1368,20 @@ def generate_learning_report_html() -> str:
         ]),
         f'<div class="note"><strong>Data integrity rule:</strong> Replay, simulation and selection intelligence use only full-field pre-race captures. Official results are outcome labels only. Historical rows are never fabricated. Legacy selected-runner captures excluded: {escape(str(legacy.get("race_count") or 0))} races.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
+        '<h2>Prediction Archive Inspection</h2>',
+        '<div class="grid">',
+        card('Snapshots Inspected', inspection.get('snapshot_count', 0)),
+        card('Reconstructable', inspection_summary.get('RECONSTRUCTABLE', 0)),
+        card('Possible Full Field', inspection_summary.get('POSSIBLE_FULL_FIELD', 0)),
+        card('Selected Only', inspection_summary.get('SELECTED_ONLY', 0)),
+        card('Unknown Format', inspection_summary.get('UNKNOWN_FORMAT', 0)),
+        card('Invalid', inspection_summary.get('INVALID', 0)),
+        card('Detected Formats', inspection_summary.get('format_count', 0)),
+        card('Candidate Runner Paths', len(inspection_paths)),
+        '</div>',
+        _html_table(['Detected Runner Path','Snapshots','Max Runners','Max Races','Max Scored Runners'], [[i.get('path'),i.get('snapshot_count'),i.get('max_runner_count'),i.get('max_race_count'),i.get('max_scored_runner_count')] for i in inspection_paths[:10]]),
+        _html_table(['Format','Snapshots','Top-Level Keys'], [[i.get('format_id'),i.get('snapshot_count'),', '.join(i.get('top_level_keys') or [])] for i in inspection_formats[:10]]),
+        '<div class="note"><strong>Inspection rule:</strong> Read-only archive inspection. No prediction, result, replay, factor or production data is changed.</div>',
         '<h2>Current Model Performance</h2>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Strengths</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]),
@@ -1386,10 +1405,10 @@ def generate_learning_report_html() -> str:
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Historical Weight Simulation</h2>',
-        '<div class="note">v2.18.1 simulations use only complete pre-race full-field captures. Result-derived or selected-runner-only rows are excluded.</div>',
+        '<div class="note">v2.18.2 simulations use only complete pre-race full-field captures. Result-derived or selected-runner-only rows are excluded.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">v2.18.1 selection intelligence compares the original pre-race full-field ranking with official outcomes. Results are never used to create the ranking.</div>',
+        '<div class="note">v2.18.2 selection intelligence compares the original pre-race full-field ranking with official outcomes. Results are never used to create the ranking.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1402,7 +1421,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.18.1 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.18.2 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)

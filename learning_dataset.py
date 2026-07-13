@@ -3,8 +3,8 @@ import json
 
 from database import fetch_all, fetch_one
 
-LEARNING_DATASET_VERSION = "2.18.1"
-MODEL_VERSION = "2.18.1"
+LEARNING_DATASET_VERSION = "2.18.2"
+MODEL_VERSION = "2.18.2"
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -24,6 +24,186 @@ def _json_object(value: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+
+
+def _walk_json(value: Any, path: str = "$"):
+    """Yield every node in a JSON document with its path."""
+    yield path, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            yield from _walk_json(child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            child_path = f"{path}[{index}]"
+            yield from _walk_json(child, child_path)
+
+
+def _looks_like_runner(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    keys = {str(k).lower() for k in item.keys()}
+    identity = bool(keys & {"runner", "runner_name", "horse_name", "name", "tab_number", "number", "runner_id"})
+    scoring = bool(keys & {"score", "final_score", "confidence", "score_breakdown", "weighted_breakdown", "factor_capture", "market_rank"})
+    race_context = bool(keys & {"race_id", "race_number", "race_no", "race"})
+    return identity and (scoring or race_context)
+
+
+def _runner_list_candidates(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for path, value in _walk_json(snapshot):
+        if not isinstance(value, list) or not value:
+            continue
+        dict_items = [item for item in value if isinstance(item, dict)]
+        runner_items = [item for item in dict_items if _looks_like_runner(item)]
+        if not runner_items:
+            continue
+        race_keys = set()
+        score_rows = 0
+        factor_rows = 0
+        for item in runner_items:
+            race_key = item.get("race_id") or item.get("race_number") or item.get("race_no") or item.get("race")
+            if race_key not in (None, ""):
+                race_keys.add(str(race_key))
+            if any(item.get(key) is not None for key in ("score", "final_score", "confidence", "market_rank")):
+                score_rows += 1
+            if item.get("score_breakdown") or item.get("weighted_breakdown") or item.get("factor_capture"):
+                factor_rows += 1
+        candidates.append({
+            "path": path,
+            "list_count": len(value),
+            "runner_count": len(runner_items),
+            "race_count": len(race_keys),
+            "scored_runner_count": score_rows,
+            "factor_runner_count": factor_rows,
+            "sample_keys": sorted({str(k) for item in runner_items[:5] for k in item.keys()})[:40],
+        })
+    return sorted(candidates, key=lambda item: (item.get("runner_count", 0), item.get("scored_runner_count", 0)), reverse=True)
+
+
+def _top_level_profile(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "top_level_keys": sorted(str(key) for key in snapshot.keys()),
+        "has_predictions": isinstance(snapshot.get("predictions"), dict),
+        "has_factor_capture": isinstance(snapshot.get("factor_capture"), dict),
+        "has_races": isinstance(snapshot.get("races"), list),
+        "has_meeting": isinstance(snapshot.get("meeting"), dict),
+        "prediction_type": snapshot.get("prediction_type"),
+        "model_version": snapshot.get("model_version"),
+    }
+
+
+def _classify_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    if not snapshot:
+        return {"classification": "INVALID", "reason": "Prediction JSON is empty or invalid.", "candidates": []}
+    candidates = _runner_list_candidates(snapshot)
+    if not candidates:
+        return {
+            "classification": "UNKNOWN_FORMAT",
+            "reason": "No runner-like lists were detected in the stored JSON.",
+            "candidates": [],
+        }
+    best = candidates[0]
+    runner_count = _int(best.get("runner_count"))
+    race_count = _int(best.get("race_count"))
+    scored_count = _int(best.get("scored_runner_count"))
+    factor_count = _int(best.get("factor_runner_count"))
+    path = str(best.get("path") or "")
+    if runner_count >= 8 and race_count >= 2 and scored_count >= max(4, int(runner_count * 0.7)):
+        classification = "RECONSTRUCTABLE"
+        reason = f"Detected {runner_count} scored runner rows across {race_count} races at {path}."
+    elif runner_count >= 8 and factor_count >= max(4, int(runner_count * 0.5)):
+        classification = "RECONSTRUCTABLE"
+        reason = f"Detected {runner_count} factor-bearing runner rows at {path}."
+    elif runner_count >= 8 and (path.endswith('.runners') or '.races' in path):
+        classification = "POSSIBLE_FULL_FIELD"
+        reason = f"Detected a large runner list ({runner_count}) at {path}, but scoring coverage needs validation."
+    else:
+        classification = "SELECTED_ONLY"
+        reason = f"Largest detected runner list contains {runner_count} rows at {path}; this appears to be selections rather than the full meeting field."
+    return {
+        "classification": classification,
+        "reason": reason,
+        "best_candidate": best,
+        "candidate_count": len(candidates),
+        "candidates": candidates[:10],
+    }
+
+
+def inspect_prediction_archive(limit: int = 1000, include_samples: bool = True) -> Dict[str, Any]:
+    rows = fetch_all(
+        """
+        SELECT meeting_id, model_version, track, meeting_date, prediction_type, prediction_json, created_at
+        FROM rrt_prediction_snapshots
+        ORDER BY meeting_date, meeting_id
+        LIMIT %s;
+        """,
+        (max(1, min(limit, 10000)),),
+    )
+    classifications = {
+        "RECONSTRUCTABLE": 0,
+        "POSSIBLE_FULL_FIELD": 0,
+        "SELECTED_ONLY": 0,
+        "UNKNOWN_FORMAT": 0,
+        "INVALID": 0,
+    }
+    path_rollup: Dict[str, Dict[str, Any]] = {}
+    format_rollup: Dict[str, int] = {}
+    inspected: List[Dict[str, Any]] = []
+    for row in rows:
+        snapshot = _json_object(row.get("prediction_json"))
+        classified = _classify_snapshot(snapshot)
+        label = classified.get("classification") or "UNKNOWN_FORMAT"
+        classifications[label] = classifications.get(label, 0) + 1
+        profile = _top_level_profile(snapshot)
+        format_key = "|".join(profile.get("top_level_keys") or [])
+        format_rollup[format_key] = format_rollup.get(format_key, 0) + 1
+        best = classified.get("best_candidate") or {}
+        path = best.get("path")
+        if path:
+            entry = path_rollup.setdefault(path, {"path": path, "snapshot_count": 0, "max_runner_count": 0, "max_race_count": 0, "max_scored_runner_count": 0})
+            entry["snapshot_count"] += 1
+            entry["max_runner_count"] = max(entry["max_runner_count"], _int(best.get("runner_count")))
+            entry["max_race_count"] = max(entry["max_race_count"], _int(best.get("race_count")))
+            entry["max_scored_runner_count"] = max(entry["max_scored_runner_count"], _int(best.get("scored_runner_count")))
+        item = {
+            "meeting_id": row.get("meeting_id"),
+            "meeting_date": row.get("meeting_date"),
+            "track": row.get("track"),
+            "model_version": row.get("model_version"),
+            "prediction_type": row.get("prediction_type"),
+            "classification": label,
+            "reason": classified.get("reason"),
+            "top_level_profile": profile,
+            "best_candidate": best,
+            "candidate_count": classified.get("candidate_count", 0),
+        }
+        if include_samples:
+            item["candidate_samples"] = classified.get("candidates") or []
+        inspected.append(item)
+    formats = [
+        {"format_id": index + 1, "snapshot_count": count, "top_level_keys": key.split("|") if key else []}
+        for index, (key, count) in enumerate(sorted(format_rollup.items(), key=lambda pair: pair[1], reverse=True))
+    ]
+    reconstructable = classifications.get("RECONSTRUCTABLE", 0) + classifications.get("POSSIBLE_FULL_FIELD", 0)
+    return {
+        "success": True,
+        "dataset_version": LEARNING_DATASET_VERSION,
+        "report": "prediction_archive_inspection",
+        "snapshot_count": len(rows),
+        "summary": {
+            **classifications,
+            "reconstructable_or_possible_count": reconstructable,
+            "selected_only_or_unusable_count": classifications.get("SELECTED_ONLY", 0) + classifications.get("UNKNOWN_FORMAT", 0) + classifications.get("INVALID", 0),
+            "format_count": len(formats),
+        },
+        "formats": formats[:20],
+        "runner_paths": sorted(path_rollup.values(), key=lambda item: item.get("snapshot_count", 0), reverse=True)[:30],
+        "snapshots": inspected,
+        "note": "Inspection is read-only. It does not alter prediction snapshots, runner factors, results, replay history or production weights.",
+    }
 
 
 def _prediction_snapshot_profile() -> Dict[str, Any]:
