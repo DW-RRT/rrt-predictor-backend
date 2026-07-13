@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.18.2"
+SCHEMA_VERSION = "2.17.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -115,9 +115,6 @@ def init_postgres_schema() -> Dict[str, Any]:
                 confidence NUMERIC(6,2),
                 market_price NUMERIC(10,2),
                 market_rank INTEGER,
-                prediction_rank INTEGER,
-                field_size INTEGER,
-                capture_scope TEXT DEFAULT 'legacy_selected_only',
                 last10_score NUMERIC(6,2),
                 win_place_score NUMERIC(6,2),
                 track_record_score NUMERIC(6,2),
@@ -152,10 +149,6 @@ def init_postgres_schema() -> Dict[str, Any]:
             );
             """
         )
-
-        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS prediction_rank INTEGER;")
-        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS field_size INTEGER;")
-        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS capture_scope TEXT DEFAULT 'legacy_selected_only';")
 
         execute_sql(
             """
@@ -248,41 +241,6 @@ def init_postgres_schema() -> Dict[str, Any]:
 
         execute_sql(
             """
-            CREATE TABLE IF NOT EXISTS rrt_learning_cycles (
-                id SERIAL PRIMARY KEY,
-                cycle_id TEXT UNIQUE NOT NULL,
-                cycle_name TEXT,
-                learning_version TEXT NOT NULL,
-                model_version TEXT,
-                dataset_json JSONB NOT NULL,
-                recommendations_json JSONB NOT NULL,
-                cycle_json JSONB NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            );
-            """
-        )
-
-        execute_sql(
-            """
-            CREATE TABLE IF NOT EXISTS rrt_factor_recommendations (
-                id SERIAL PRIMARY KEY,
-                cycle_id TEXT NOT NULL,
-                factor TEXT NOT NULL,
-                current_weight NUMERIC,
-                recommended_weight NUMERIC,
-                change_amount NUMERIC,
-                expected_improvement NUMERIC,
-                confidence_pct NUMERIC,
-                status TEXT,
-                rationale TEXT,
-                recommendation_json JSONB NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            );
-            """
-        )
-
-        execute_sql(
-            """
             CREATE TABLE IF NOT EXISTS rrt_selection_analysis (
                 id SERIAL PRIMARY KEY,
                 analysis_version TEXT,
@@ -309,8 +267,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.18.2",
-                "RRT Predictor v2.18.2 unified pre-race learning dataset and full-field factor capture.",
+                "2.17.0",
+                "RRT Predictor v2.17.0 historical replay engine. Production prediction logic unchanged; replay and analysis only.",
                 True,
             ),
         )
@@ -330,8 +288,6 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_weight_simulations",
                 "rrt_selection_analysis",
                 "rrt_replay_runs",
-                "rrt_learning_cycles",
-                "rrt_factor_recommendations",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -396,8 +352,6 @@ def get_database_summary() -> Dict[str, Any]:
         simulation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_weight_simulations;")
         selection_analysis_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_selection_analysis;")
         replay_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_replay_runs;")
-        learning_cycle_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_learning_cycles;")
-        factor_recommendation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_factor_recommendations;")
 
         averages = fetch_one(
             """
@@ -462,8 +416,6 @@ def get_database_summary() -> Dict[str, Any]:
                 "weight_simulations": int((simulation_count or {}).get("count") or 0),
                 "selection_analysis": int((selection_analysis_count or {}).get("count") or 0),
                 "replay_runs": int((replay_count or {}).get("count") or 0),
-                "learning_cycles": int((learning_cycle_count or {}).get("count") or 0),
-                "factor_recommendations": int((factor_recommendation_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,
@@ -585,7 +537,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = None,
+    model_version: str = "2.8.1",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -601,13 +553,12 @@ def load_prediction_snapshot(
                 created_at
             FROM rrt_prediction_snapshots
             WHERE meeting_id = %s
-              AND (%s IS NULL OR model_version = %s)
+              AND model_version = %s
             ORDER BY created_at DESC
             LIMIT 1;
             """,
             (
                 meeting_id,
-                model_version,
                 model_version,
             ),
         )
@@ -938,9 +889,6 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     confidence,
                     market_price,
                     market_rank,
-                    prediction_rank,
-                    field_size,
-                    capture_scope,
                     last10_score,
                     win_place_score,
                     track_record_score,
@@ -971,8 +919,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
                 )
                 ON CONFLICT (meeting_id, model_version, runner_key)
                 DO UPDATE SET
@@ -987,9 +934,6 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     confidence = EXCLUDED.confidence,
                     market_price = EXCLUDED.market_price,
                     market_rank = EXCLUDED.market_rank,
-                    prediction_rank = EXCLUDED.prediction_rank,
-                    field_size = EXCLUDED.field_size,
-                    capture_scope = EXCLUDED.capture_scope,
                     last10_score = EXCLUDED.last10_score,
                     win_place_score = EXCLUDED.win_place_score,
                     track_record_score = EXCLUDED.track_record_score,
@@ -1032,9 +976,6 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     runner.get("confidence"),
                     runner.get("price"),
                     runner.get("market_rank"),
-                    runner.get("prediction_rank"),
-                    runner.get("field_size"),
-                    runner.get("capture_scope") or (prediction_snapshot.get("factor_capture") or {}).get("capture_scope") or "legacy_selected_only",
                     breakdown.get("last10_form"),
                     breakdown.get("win_place"),
                     breakdown.get("track_record"),

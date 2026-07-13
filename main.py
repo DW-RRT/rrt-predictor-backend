@@ -122,19 +122,9 @@ from replay_engine import (
     get_replay_summary,
 )
 
-from learning_dataset import get_learning_dataset_audit, reconstruct_learning_dataset, inspect_prediction_archive
-
-from adaptive_learning_engine import (
-    run_adaptive_learning_cycle,
-    get_learning_cycle_report,
-    get_learning_cycle_history,
-    get_learning_recommendation_history,
-    get_adaptive_learning_summary,
-)
-
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.18.2",
+    version="2.17.0",
 )
 
 app.add_middleware(
@@ -839,10 +829,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.18.2",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.18.2",
-        "model_version": "2.18.2",
+        "backend_version": "2.17.0",
+        "model_version": "2.8.1",
     }
 
 
@@ -852,10 +842,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.18.2",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.18.2",
-        "model_version": "2.18.2",
+        "backend_version": "2.17.0",
+        "model_version": "2.8.1",
         "cache_ttl_seconds": 300
     }
 
@@ -917,14 +907,6 @@ def api_route_check():
         "/api/replay/report": True,
         "/api/replay/history": True,
         "/api/replay/summary": True,
-        "/api/learning-dataset/audit": True,
-        "/api/learning-dataset/reconstruct": True,
-        "/api/learning-dataset/inspect": True,
-        "/api/adaptive-learning/run": True,
-        "/api/adaptive-learning/report": True,
-        "/api/adaptive-learning/history": True,
-        "/api/adaptive-learning/recommendations": True,
-        "/api/adaptive-learning/summary": True,
     }
 
     route_availability = {
@@ -935,11 +917,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.18.2",
+        "version": "2.17.0",
         "app_version": "1.0.0",
-        "backend_version": "2.18.2",
-        "model_version": "2.18.2",
-        "database_schema_version": "2.18.2",
+        "backend_version": "2.17.0",
+        "model_version": "2.8.1",
+        "database_schema_version": "2.17.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -1111,7 +1093,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.18.2
+# Performance Reporting Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1145,7 +1127,7 @@ def api_report_by_model():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.18.2
+# Performance Analytics Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1184,7 +1166,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.18.2
+# Learning Centre Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1216,13 +1198,13 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_18_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_16_0.pdf"
         },
     )
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.18.2
+# Factor Capture Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/factor-capture/summary")
@@ -1231,7 +1213,7 @@ def api_factor_capture_summary():
 
 
 # ---------------------------------------------------------------------
-# Evidence-Based Factor Analysis Routes - RRT Predictor v2.18.2
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/analysis/factor-effectiveness")
@@ -1259,12 +1241,12 @@ def api_analysis_model_health():
 
 
 # ---------------------------------------------------------------------
-# Historical Weight Simulation Routes - RRT Predictor v2.18.2
+# Historical Weight Simulation Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/simulator/run")
 def api_simulator_run(
-    simulation_name: str = Query("v2.18.2 default simulation"),
+    simulation_name: str = Query("v2.15.0 default simulation"),
     notes: str = Query(""),
     min_meeting_date: Optional[str] = Query(None),
     max_meeting_date: Optional[str] = Query(None),
@@ -1351,7 +1333,7 @@ def api_simulator_best(limit: int = Query(10)):
 
 
 # ---------------------------------------------------------------------
-# Selection Intelligence Routes - RRT Predictor v2.18.2
+# Selection Intelligence Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/selection-intelligence/run")
@@ -1392,15 +1374,15 @@ def api_selection_intelligence_category_analysis():
 
 
 # ---------------------------------------------------------------------
-# Historical Replay Engine Routes - RRT Predictor v2.18.2
+# Historical Replay Engine Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 @app.get("/api/replay/run")
 def api_replay_run(
-    replay_name: str = Query("v2.18.2 historical replay"),
+    replay_name: str = Query("v2.17.0 historical replay"),
     min_meeting_date: Optional[str] = Query(None),
     max_meeting_date: Optional[str] = Query(None),
-    model_version: Optional[str] = Query(None),
+    model_version: Optional[str] = Query("2.8.1"),
     roughie_min_price: float = Query(7.0),
     roughie_min_market_rank: int = Query(5),
     include_selections: bool = Query(False),
@@ -1448,57 +1430,6 @@ def api_replay_history(limit: int = Query(20)):
 @app.get("/api/replay/summary")
 def api_replay_summary():
     return get_replay_summary()
-
-
-# ---------------------------------------------------------------------
-# Unified Learning Dataset and Adaptive Learning - v2.18.2
-# ---------------------------------------------------------------------
-
-@app.get("/api/learning-dataset/audit")
-def api_learning_dataset_audit():
-    return get_learning_dataset_audit()
-
-@app.get("/api/learning-dataset/reconstruct")
-def api_learning_dataset_reconstruct(
-    limit: int = Query(1000),
-    dry_run: bool = Query(False),
-):
-    return reconstruct_learning_dataset(limit=limit, dry_run=dry_run)
-
-
-@app.get("/api/learning-dataset/inspect")
-def api_learning_dataset_inspect(
-    limit: int = Query(1000),
-    include_samples: bool = Query(True),
-):
-    return inspect_prediction_archive(limit=limit, include_samples=include_samples)
-
-
-@app.get("/api/adaptive-learning/run")
-def api_adaptive_learning_run(
-    cycle_name: str = Query("v2.18.2 adaptive learning cycle"),
-):
-    return run_adaptive_learning_cycle(cycle_name=cycle_name, save_result=True)
-
-
-@app.get("/api/adaptive-learning/report")
-def api_adaptive_learning_report(cycle_id: Optional[str] = Query(None)):
-    return get_learning_cycle_report(cycle_id=cycle_id)
-
-
-@app.get("/api/adaptive-learning/history")
-def api_adaptive_learning_history(limit: int = Query(20)):
-    return get_learning_cycle_history(limit=limit)
-
-
-@app.get("/api/adaptive-learning/recommendations")
-def api_adaptive_learning_recommendations(limit: int = Query(100)):
-    return get_learning_recommendation_history(limit=limit)
-
-
-@app.get("/api/adaptive-learning/summary")
-def api_adaptive_learning_summary():
-    return get_adaptive_learning_summary()
 
 
 # ---------------------------------------------------------------------
@@ -1818,7 +1749,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.18.2)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.17.0)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -1953,7 +1884,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.18.2",
+        "model_version": "2.8.1",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2215,7 +2146,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.18.2 Single-Factor Historical Simulation Suite",
+        "source": "RRT Predictor v2.17.0 Single-Factor Historical Simulation Suite",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -2254,7 +2185,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.18.2
+# Automatic Results Processor - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
@@ -2264,14 +2195,14 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
     if not prediction_snapshot:
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
-            model_version=None,
+            model_version="2.8.1",
         )
 
         if not postgres_prediction.get("success"):
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.18.2 Automatic Results Processor",
+                "source": "RRT Predictor v2.17.0 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2640,7 +2571,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.18.2 Single-Factor Historical Simulation Suite",
+            "source": "RRT Predictor v2.17.0 Single-Factor Historical Simulation Suite",
             "meeting_id": meeting_id,
             "error": str(error),
         }

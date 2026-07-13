@@ -3,11 +3,10 @@ import json
 from datetime import datetime
 
 from database import fetch_all, fetch_one, execute_sql
-from learning_dataset import get_learning_dataset_audit, load_learning_rows
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.18.1"
-MODEL_VERSION = "2.18.1"
+SELECTION_INTELLIGENCE_VERSION = "2.16.0"
+MODEL_VERSION = "2.8.1"
 
 
 FACTOR_COLUMNS = [
@@ -52,10 +51,36 @@ def _load_completed_rows(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    return load_learning_rows(
-        min_meeting_date=min_meeting_date,
-        max_meeting_date=max_meeting_date,
-        model_version=None,
+    where_parts = [
+        "actual_position IS NOT NULL",
+        "meeting_id IS NOT NULL",
+        "race_number IS NOT NULL",
+    ]
+    params: List[Any] = []
+
+    if min_meeting_date:
+        where_parts.append("meeting_date >= %s")
+        params.append(min_meeting_date)
+
+    if max_meeting_date:
+        where_parts.append("meeting_date <= %s")
+        params.append(max_meeting_date)
+
+    return fetch_all(
+        f"""
+        SELECT
+            meeting_id, model_version, track, meeting_date, race_id, race_number,
+            runner_key, runner_name, tab_number, final_score, confidence,
+            market_price, market_rank, last10_score, win_place_score,
+            track_record_score, distance_record_score, track_distance_record_score,
+            track_condition_score, trainer_score, jockey_score, trainer_jockey_score,
+            barrier_score, weight_score, market_score, actual_position, actual_price,
+            hit_win, hit_place, factor_json
+        FROM rrt_runner_factor_snapshots
+        WHERE {" AND ".join(where_parts)}
+        ORDER BY meeting_date ASC, meeting_id ASC, race_number ASC, final_score DESC, runner_name ASC;
+        """,
+        tuple(params),
     )
 
 
@@ -335,18 +360,6 @@ def run_selection_intelligence_analysis(
 ) -> Dict[str, Any]:
     try:
         rows = _load_completed_rows(min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date)
-        if not rows:
-            return {
-                "success": False,
-                "provider": "RRT Predictor",
-                "selection_intelligence_version": SELECTION_INTELLIGENCE_VERSION,
-                "report": "selection_intelligence",
-                "analysis_only": True,
-                "prediction_model_changed": False,
-                "message": "Selection intelligence not run: no valid full-field pre-race rows with official outcomes are available.",
-                "dataset": {"runner_rows": 0, "race_count": 0, "audit": get_learning_dataset_audit()},
-                "next_step": "Run /api/learning-dataset/reconstruct and collect new full-field prediction captures.",
-            }
         grouped = _group_by_race(rows)
         race_analyses = []
         for race_key, race_rows in grouped.items():
@@ -392,8 +405,6 @@ def run_selection_intelligence_analysis(
                 "race_count": race_count,
                 "min_meeting_date": min_meeting_date,
                 "max_meeting_date": max_meeting_date,
-                "audit": get_learning_dataset_audit(),
-                "capture_requirement": "full_field_pre_race_only",
             },
             "summary": {
                 "top4_hit_count": hit_count,
@@ -481,7 +492,7 @@ def get_selection_analysis_history(limit: int = 10) -> Dict[str, Any]:
 
 def get_latest_selection_analysis() -> Dict[str, Any]:
     try:
-        row = fetch_one("SELECT analysis_json FROM rrt_selection_analysis WHERE analysis_version = '2.18.1' ORDER BY generated_at DESC LIMIT 1;")
+        row = fetch_one("SELECT analysis_json FROM rrt_selection_analysis ORDER BY generated_at DESC LIMIT 1;")
         if not row:
             return run_selection_intelligence_analysis(save_result=True)
         analysis = row.get("analysis_json") or {}
