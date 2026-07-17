@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.18.3"
-MODEL_VERSION = "2.18.3"
+SELECTION_INTELLIGENCE_VERSION = "2.18.4"
+MODEL_VERSION = "2.18.4"
 
 
 FACTOR_COLUMNS = [
@@ -55,6 +55,7 @@ def _load_completed_rows(
         "actual_position IS NOT NULL",
         "meeting_id IS NOT NULL",
         "race_number IS NOT NULL",
+        "model_version IN ('2.18.3','2.18.4')",
     ]
     params: List[Any] = []
 
@@ -360,7 +361,9 @@ def run_selection_intelligence_analysis(
 ) -> Dict[str, Any]:
     try:
         rows = _load_completed_rows(min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date)
-        grouped = _group_by_race(rows)
+        grouped_all = _group_by_race(rows)
+        grouped = {key: value for key, value in grouped_all.items() if len(value) >= 4}
+        excluded_partial_races = len(grouped_all) - len(grouped)
         race_analyses = []
         for race_key, race_rows in grouped.items():
             analysed = _analyse_race(race_key, race_rows)
@@ -405,6 +408,8 @@ def run_selection_intelligence_analysis(
                 "race_count": race_count,
                 "min_meeting_date": min_meeting_date,
                 "max_meeting_date": max_meeting_date,
+                "capture_scope": "native_full_field_completed_only",
+                "excluded_partial_races": excluded_partial_races,
             },
             "summary": {
                 "top4_hit_count": hit_count,
@@ -492,8 +497,14 @@ def get_selection_analysis_history(limit: int = 10) -> Dict[str, Any]:
 
 def get_latest_selection_analysis() -> Dict[str, Any]:
     try:
-        row = fetch_one("SELECT analysis_json FROM rrt_selection_analysis ORDER BY generated_at DESC LIMIT 1;")
-        if not row:
+        row = fetch_one("SELECT analysis_json, generated_at FROM rrt_selection_analysis ORDER BY generated_at DESC LIMIT 1;")
+        latest_native = fetch_one("""
+            SELECT MAX(updated_at) AS latest_completed_at
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL
+              AND model_version IN ('2.18.3','2.18.4');
+        """) or {}
+        if (not row) or (latest_native.get("latest_completed_at") and row.get("generated_at") and row.get("generated_at") < latest_native.get("latest_completed_at")):
             return run_selection_intelligence_analysis(save_result=True)
         analysis = row.get("analysis_json") or {}
         if isinstance(analysis, str):

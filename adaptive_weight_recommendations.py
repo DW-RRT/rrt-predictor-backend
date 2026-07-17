@@ -2,21 +2,21 @@ from typing import Any, Dict, List
 
 from factor_analysis import get_factor_effectiveness_report
 
-RECOMMENDATION_VERSION = "2.15.0"
+RECOMMENDATION_VERSION = "2.18.4"
 
 CURRENT_MODEL_WEIGHTS = {
-    "last10": 14.0,
-    "win_place": 8.0,
+    "last10": 15.0,
+    "win_place": 9.0,
     "track_record": 8.0,
     "distance_record": 8.0,
     "track_distance": 8.0,
     "track_condition": 8.0,
     "trainer": 7.0,
     "jockey": 7.0,
-    "trainer_jockey": 10.0,
-    "barrier": 5.0,
-    "weight": 5.0,
-    "market": 12.0,
+    "trainer_jockey": 9.0,
+    "barrier": 4.0,
+    "weight": 3.0,
+    "market": 14.0,
 }
 
 
@@ -58,6 +58,6 @@ def get_weight_recommendations() -> Dict[str, Any]:
         reduce = [item for item in recommendations if item.get("change", 0) < 0]
         hold = [item for item in recommendations if item.get("change", 0) == 0]
         net_change = round(sum(_to_float(item.get("change")) for item in recommendations), 2)
-        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": CURRENT_MODEL_WEIGHTS, "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "These are recommendation-only values. No production model weights have been changed."}
+        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": CURRENT_MODEL_WEIGHTS, "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "Recommendations are measured against the active v2.18.4 calibrated production weights. Future changes remain analysis-only until explicitly promoted."}
     except Exception as error:
         return {"success": False, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "error": str(error)}

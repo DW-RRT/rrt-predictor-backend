@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.18.3"
+SCHEMA_VERSION = "2.18.4"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -268,6 +268,40 @@ def init_postgres_schema() -> Dict[str, Any]:
 
         execute_sql(
             """
+            CREATE TABLE IF NOT EXISTS rrt_model_weight_sets (
+                id SERIAL PRIMARY KEY,
+                model_version TEXT UNIQUE NOT NULL,
+                status TEXT NOT NULL,
+                weights_json JSONB NOT NULL,
+                source TEXT,
+                notes TEXT,
+                activated_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+        execute_sql(
+            """
+            INSERT INTO rrt_model_weight_sets (model_version,status,weights_json,source,notes,activated_at)
+            VALUES
+              ('2.18.3','Rollback',%s::jsonb,'RRT Predictor','Verified rollback baseline before v2.18.4 recalibration.',NULL),
+              ('2.18.4','Active',%s::jsonb,'RRT Predictor','Calibrated production weights. Automatic future promotion remains disabled.',NOW())
+            ON CONFLICT (model_version) DO UPDATE SET
+              status=EXCLUDED.status,
+              weights_json=EXCLUDED.weights_json,
+              source=EXCLUDED.source,
+              notes=EXCLUDED.notes,
+              activated_at=EXCLUDED.activated_at;
+            """,
+            (
+                json.dumps({"last10":15,"win_place":8,"track_record":8,"distance_record":9,"track_distance":9,"track_condition":12,"trainer":10,"jockey":8,"trainer_jockey":12,"barrier":4,"weight":2,"market":3}),
+                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14}),
+            ),
+        )
+
+        execute_sql(
+            """
             CREATE TABLE IF NOT EXISTS rrt_factor_recommendations (
                 id SERIAL PRIMARY KEY,
                 cycle_id TEXT NOT NULL,
@@ -320,8 +354,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.18.3",
-                "RRT Predictor v2.18.3 native full-field capture and adaptive learning integration. Historical learning retained; production weights unchanged automatically.",
+                "2.18.4",
+                "RRT Predictor v2.18.4 calibrated production weights, native full-field simulation, replay validation and selection intelligence refresh.",
                 True,
             ),
         )
@@ -343,6 +377,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_replay_runs",
                 "rrt_learning_cycles",
                 "rrt_factor_recommendations",
+                "rrt_model_weight_sets",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -409,6 +444,7 @@ def get_database_summary() -> Dict[str, Any]:
         replay_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_replay_runs;")
         learning_cycle_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_learning_cycles;")
         factor_recommendation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_factor_recommendations;")
+        weight_set_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_model_weight_sets;")
 
         averages = fetch_one(
             """
@@ -475,6 +511,7 @@ def get_database_summary() -> Dict[str, Any]:
                 "replay_runs": int((replay_count or {}).get("count") or 0),
                 "learning_cycles": int((learning_cycle_count or {}).get("count") or 0),
                 "factor_recommendations": int((factor_recommendation_count or {}).get("count") or 0),
+                "model_weight_sets": int((weight_set_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,
@@ -596,7 +633,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.18.3",
+    model_version: str = "2.18.4",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(

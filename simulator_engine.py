@@ -5,24 +5,40 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.18.3"
-MODEL_VERSION = "2.18.3"
+SIMULATOR_VERSION = "2.18.4"
+MODEL_VERSION = "2.18.4"
 
 
 CURRENT_MODEL_WEIGHTS = {
-    "last10": 14.0,
-    "win_place": 8.0,
+    "last10": 15.0,
+    "win_place": 9.0,
     "track_record": 8.0,
     "distance_record": 8.0,
     "track_distance": 8.0,
     "track_condition": 8.0,
     "trainer": 7.0,
     "jockey": 7.0,
-    "trainer_jockey": 10.0,
-    "barrier": 5.0,
-    "weight": 5.0,
-    "market": 12.0,
+    "trainer_jockey": 9.0,
+    "barrier": 4.0,
+    "weight": 3.0,
+    "market": 14.0,
 }
+
+ROLLBACK_MODEL_WEIGHTS = {
+    "last10": 15.0,
+    "win_place": 8.0,
+    "track_record": 8.0,
+    "distance_record": 9.0,
+    "track_distance": 9.0,
+    "track_condition": 12.0,
+    "trainer": 10.0,
+    "jockey": 8.0,
+    "trainer_jockey": 12.0,
+    "barrier": 4.0,
+    "weight": 2.0,
+    "market": 3.0,
+}
+
 
 
 DEFAULT_TEST_WEIGHTS = {
@@ -142,7 +158,12 @@ def _score_runner_from_weights(row: Dict[str, Any], weights: Dict[str, float]) -
 
 
 def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None) -> List[Dict[str, Any]]:
-    where_parts = ["actual_position IS NOT NULL", "race_number IS NOT NULL", "meeting_id IS NOT NULL"]
+    where_parts = [
+        "actual_position IS NOT NULL",
+        "race_number IS NOT NULL",
+        "meeting_id IS NOT NULL",
+        "model_version IN ('2.18.3','2.18.4')",
+    ]
     params: List[Any] = []
     if min_meeting_date:
         where_parts.append("meeting_date >= %s")
@@ -432,8 +453,8 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
     try:
         rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
         grouped = _group_by_race(rows)
-        current_weights = _normalise_weights(CURRENT_MODEL_WEIGHTS)
-        proposed_weights = _normalise_weights(test_weights or DEFAULT_TEST_WEIGHTS)
+        current_weights = _normalise_weights(ROLLBACK_MODEL_WEIGHTS)
+        proposed_weights = _normalise_weights(test_weights or CURRENT_MODEL_WEIGHTS)
         current_result = _evaluate_grouped_races(grouped, current_weights, 10.0, 6, 45.0)
         simulated_result = _evaluate_grouped_races(grouped, proposed_weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
         cm = current_result.get("metrics") or {}
@@ -460,7 +481,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "analysis_only": True,
             "prediction_model_changed": False,
             "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
-            "roughie_rules": {"current_baseline": {"min_price": 10.0, "min_market_rank": 6, "min_score": 45.0}, "simulated": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}},
+            "roughie_rules": {"current_baseline": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}, "simulated": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}},
             "current_weights": current_weights,
             "test_weights": proposed_weights,
             "current_model": current_result,
@@ -473,7 +494,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             ),
             "recommendation": _simulation_recommendation(improvement),
             "notes": notes,
-            "safety_note": "Simulation only. No production model weights have been changed.",
+            "safety_note": "Calibration evidence only. Active v2.18.4 weights are fixed in code; this endpoint does not change them.",
         }
         if save_result:
             response["postgres_history"] = save_weight_simulation(response)
@@ -561,14 +582,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.15.4 sensitivity single-factor suite",
+                notes="v2.18.4 calibrated native full-field suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.15.4 sensitivity single-factor suite",
+                simulation_group="v2.18.4 calibrated native full-field suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -637,6 +658,38 @@ def run_default_simulation_suite(
             "report": "default_single_factor_simulation_suite",
             "error": str(error),
         }
+
+
+def run_production_calibration(
+    min_meeting_date: Optional[str] = None,
+    max_meeting_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compare the v2.18.3 rollback baseline with the active v2.18.4 weights."""
+    return run_weight_simulation(
+        test_weights=CURRENT_MODEL_WEIGHTS,
+        simulation_name="v2.18.4 production calibration",
+        notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
+        min_meeting_date=min_meeting_date,
+        max_meeting_date=max_meeting_date,
+        roughie_min_price=7.0,
+        roughie_min_market_rank=5,
+        roughie_min_score=50.0,
+        save_result=True,
+        simulation_group="v2.18.4 production calibration",
+    )
+
+
+def get_active_weight_summary() -> Dict[str, Any]:
+    return {
+        "success": True,
+        "simulator_version": SIMULATOR_VERSION,
+        "model_version": MODEL_VERSION,
+        "active_weights": CURRENT_MODEL_WEIGHTS,
+        "rollback_weights": ROLLBACK_MODEL_WEIGHTS,
+        "active_weight_total": round(sum(CURRENT_MODEL_WEIGHTS.values()), 2),
+        "rollback_weight_total": round(sum(ROLLBACK_MODEL_WEIGHTS.values()), 2),
+        "automatic_weight_changes_enabled": False,
+    }
 
 
 def get_simulation_report(simulation_id: Optional[str]=None) -> Dict[str, Any]:

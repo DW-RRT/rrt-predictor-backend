@@ -15,22 +15,22 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.18.3"
-PREDICTION_TYPE = "RRT Predictor v2.18.3 - Native Full-Field Capture + Adaptive Learning Integration"
+MODEL_VERSION = "2.18.4"
+PREDICTION_TYPE = "RRT Predictor v2.18.4 - Calibrated Production Weights + Native Validation"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
-    "win_place": 0.08,
+    "win_place": 0.09,
     "track_record": 0.08,
-    "distance_record": 0.09,
-    "track_distance_record": 0.09,
-    "track_condition_record": 0.12,
-    "trainer_a2e": 0.10,
-    "jockey_a2e": 0.08,
-    "trainer_jockey_a2e_combo": 0.12,
+    "distance_record": 0.08,
+    "track_distance_record": 0.08,
+    "track_condition_record": 0.08,
+    "trainer_a2e": 0.07,
+    "jockey_a2e": 0.07,
+    "trainer_jockey_a2e_combo": 0.09,
     "barrier": 0.04,
-    "weight_carried": 0.02,
-    "market_price": 0.03,
+    "weight_carried": 0.03,
+    "market_price": 0.14,
 }
 
 PF_AI_STRATEGY = {
@@ -1259,7 +1259,7 @@ def predict_from_form_data(
             "scoring_weights": SCORING_WEIGHTS,
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.18.3",
+                "version": "2.18.4",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1344,7 +1344,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.18.3",
+            "version": "2.18.4",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),

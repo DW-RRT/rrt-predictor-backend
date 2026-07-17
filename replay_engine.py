@@ -5,10 +5,10 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.17.0"
-MODEL_VERSION = "2.8.1"
+REPLAY_VERSION = "2.18.4"
+MODEL_VERSION = "2.18.4"
 
-DEFAULT_WEIGHTS: Dict[str, float] = {
+ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
     "win_place": 0.08,
     "track_record": 0.08,
@@ -21,6 +21,21 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "barrier": 0.04,
     "weight": 0.02,
     "market": 0.03,
+}
+
+DEFAULT_WEIGHTS: Dict[str, float] = {
+    "last10": 0.15,
+    "win_place": 0.09,
+    "track_record": 0.08,
+    "distance_record": 0.08,
+    "track_distance": 0.08,
+    "track_condition": 0.08,
+    "trainer": 0.07,
+    "jockey": 0.07,
+    "trainer_jockey": 0.09,
+    "barrier": 0.04,
+    "weight": 0.03,
+    "market": 0.14,
 }
 
 FACTOR_COLUMNS = {
@@ -76,6 +91,8 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
     if model_version:
         clauses.append("model_version = %s")
         params.append(model_version)
+    else:
+        clauses.append("model_version IN ('2.18.3','2.18.4')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -137,11 +154,11 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.17.0 historical replay",
+    replay_name: str = "v2.18.4 calibrated replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
-    model_version: Optional[str] = MODEL_VERSION,
+    model_version: Optional[str] = None,
     roughie_min_price: float = 7.0,
     roughie_min_market_rank: int = 5,
     save_result: bool = True,
@@ -151,10 +168,12 @@ def run_historical_replay(
         weights = _normalise_weights(test_weights)
         rows = _dataset(min_meeting_date, max_meeting_date, model_version)
         groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]] = {}
+        rollback_weights = _normalise_weights(ROLLBACK_WEIGHTS)
         for row in rows:
+            row["current_score"] = _score(row, rollback_weights)
             row["replay_score"] = _score(row, weights)
             groups.setdefault(_race_key(row), []).append(row)
-        current = _metrics(groups, "final_score", roughie_min_price, roughie_min_market_rank)
+        current = _metrics(groups, "current_score", roughie_min_price, roughie_min_market_rank)
         replay = _metrics(groups, "replay_score", roughie_min_price, roughie_min_market_rank)
         improvement = {
             key: round(_float(replay.get(key)) - _float(current.get(key)), 2)
@@ -168,7 +187,7 @@ def run_historical_replay(
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "dataset": {"runner_count": len(rows), "race_count": len(groups), "meeting_count": len({r.get('meeting_id') for r in rows}),
                         "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
-            "current_weights": DEFAULT_WEIGHTS, "replay_weights": weights,
+            "current_weights": rollback_weights, "replay_weights": weights,
             "roughie_rules": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank},
             "current_metrics": {k: v for k, v in current.items() if k != "selections"},
             "replay_metrics": {k: v for k, v in replay.items() if k != "selections"},
@@ -186,7 +205,7 @@ def run_historical_replay(
                  replay_weights_json, current_metrics_json, replay_metrics_json, improvement_json, replay_json)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
                 (replay_id, replay_name, REPLAY_VERSION, model_version, min_meeting_date, max_meeting_date,
-                 len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(DEFAULT_WEIGHTS),
+                 len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(rollback_weights),
                  json.dumps(weights), json.dumps(result["current_metrics"]), json.dumps(result["replay_metrics"]),
                  json.dumps(improvement), json.dumps(result, default=str)),
             )

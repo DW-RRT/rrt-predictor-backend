@@ -11,11 +11,11 @@ from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.18.3"
-ANALYTICS_VERSION = "2.18.3"
-DATABASE_SCHEMA_VERSION = "2.18.3"
-MODEL_VERSION = "2.18.3"
-LEARNING_VERSION = "2.18.3"
+REPORT_VERSION = "2.18.4"
+ANALYTICS_VERSION = "2.18.4"
+DATABASE_SCHEMA_VERSION = "2.18.4"
+MODEL_VERSION = "2.18.4"
+LEARNING_VERSION = "2.18.4"
 
 
 # ---------------------------------------------------------------------
@@ -1288,7 +1288,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "simulation_history": get_simulation_history(limit=5),
             "best_simulations": get_best_simulations(limit=5),
             "selection_intelligence": get_latest_selection_analysis(),
-            "safety_note": "This report is analysis-only. No model weights, scoring factors, or production prediction behaviour have been changed.",
+            "safety_note": "This report reflects the active v2.18.4 calibrated production weights. Future adaptive recommendations remain analysis-only and are not applied automatically.",
         }
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION, "report": "learning_recommendations", "error": str(error)}
@@ -1340,7 +1340,7 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         '<h2>Evidence-Based Factor Analysis</h2>',
-        '<div class="note">This section compares completed runner factor scores against actual results. It is analysis-only and does not change production weights.</div>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It is reports against the active v2.18.4 calibrated production weights; future recommendations remain analysis-only.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
         _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:12]]),
         '<h3>Weight Recommendation Review</h3>',
@@ -1364,7 +1364,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.18.3 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.18.4 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
@@ -1428,7 +1428,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(t(["Rank","Horse","Runs","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
     story.append(PageBreak())
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
-    story.append(Paragraph("This section compares completed runner factor scores against actual results. It is analysis-only and does not change production weights.", styles["BodyText"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It is reports against the active v2.18.4 calibrated production weights; future recommendations remain analysis-only.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}

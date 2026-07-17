@@ -9,8 +9,8 @@ from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
-LEARNING_VERSION = "2.18.3"
-MODEL_VERSION = "2.18.3"
+LEARNING_VERSION = "2.18.4"
+MODEL_VERSION = "2.18.4"
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -107,7 +107,7 @@ def _status(confidence: float, expected_improvement: float, change: float) -> st
     return "Reject"
 
 
-def run_adaptive_learning_cycle(cycle_name: str = "v2.18.3 native adaptive learning cycle", save_result: bool = True) -> Dict[str, Any]:
+def run_adaptive_learning_cycle(cycle_name: str = "v2.18.4 calibrated adaptive learning cycle", save_result: bool = True) -> Dict[str, Any]:
     try:
         factors = get_factor_effectiveness_report()
         weights = get_weight_recommendations()
@@ -124,7 +124,7 @@ def run_adaptive_learning_cycle(cycle_name: str = "v2.18.3 native adaptive learn
             return {
                 "success": False, "provider": "PostgreSQL",
                 "learning_version": LEARNING_VERSION, "model_version": MODEL_VERSION,
-                "analysis_only": True, "production_weights_changed": False,
+                "analysis_only": True, "production_weights_changed": True,
                 "message": "Adaptive learning not run: no completed historical factor evidence is available.",
                 "dataset": dataset,
                 "next_step": "Continue native full-field capture and automatic results processing. Historical reconstruction is not required.",
@@ -161,7 +161,7 @@ def run_adaptive_learning_cycle(cycle_name: str = "v2.18.3 native adaptive learn
             "learning_version": LEARNING_VERSION, "model_version": MODEL_VERSION,
             "cycle_id": cycle_id, "cycle_name": cycle_name,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "analysis_only": True, "production_weights_changed": False,
+            "analysis_only": True, "production_weights_changed": True,
             "learning_source": "historical_factor_analysis",
             "historical_learning_retained": True,
             "reconstructed_full_field_history_required": False,
@@ -178,7 +178,7 @@ def run_adaptive_learning_cycle(cycle_name: str = "v2.18.3 native adaptive learn
                 "monitor": sum(1 for r in recommendations if r.get("status") == "Monitor"),
                 "reject": sum(1 for r in recommendations if r.get("status") == "Reject"),
             },
-            "safety_note": "Recommendations are evidence-only. Production weights are never changed automatically.",
+            "safety_note": "The v2.18.4 calibrated production weights are active. New recommendations remain evidence-only and are never applied automatically.",
         }
         if save_result:
             execute_sql("""INSERT INTO rrt_learning_cycles
@@ -223,5 +223,5 @@ def get_adaptive_learning_summary() -> Dict[str, Any]:
         "historical_learning_retained": True,
         "native_full_field_capture_active": True,
         "reconstructed_full_field_history_required": False,
-        "analysis_only": True, "production_weights_changed": False,
+        "analysis_only": True, "production_weights_changed": True,
     }
