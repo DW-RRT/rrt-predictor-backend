@@ -1,8 +1,9 @@
 from typing import Any, Dict, List
 
 from factor_analysis import get_factor_effectiveness_report
+from database import fetch_one
 
-RECOMMENDATION_VERSION = "2.18.4"
+RECOMMENDATION_VERSION = "2.19.0"
 
 CURRENT_MODEL_WEIGHTS = {
     "last10": 15.0,
@@ -20,6 +21,16 @@ CURRENT_MODEL_WEIGHTS = {
 }
 
 
+def _active_model_weights() -> Dict[str, float]:
+    try:
+        row = fetch_one("SELECT weights_json FROM rrt_model_weight_sets WHERE status='Active' ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1;") or {}
+        raw = row.get("weights_json") or {}
+        if isinstance(raw, dict) and raw:
+            return {key: float(raw.get(key, value)) for key, value in CURRENT_MODEL_WEIGHTS.items()}
+    except Exception:
+        pass
+    return dict(CURRENT_MODEL_WEIGHTS)
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -30,7 +41,7 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 
 def _suggest_weight_change(factor: Dict[str, Any], dataset_confidence: str) -> Dict[str, Any]:
-    key = factor.get("factor"); label = factor.get("label"); current_weight = CURRENT_MODEL_WEIGHTS.get(str(key), 0.0)
+    key = factor.get("factor"); label = factor.get("label"); current_weight = _active_model_weights().get(str(key), 0.0)
     combined = _to_float(factor.get("combined_predictive_score")); winner_gap = _to_float(factor.get("winner_gap")); place_gap = _to_float(factor.get("place_gap")); sample_confidence = factor.get("confidence")
     if dataset_confidence in ["Low", "Early"] or sample_confidence == "Low":
         recommended_weight = current_weight; direction = "Hold"; priority = "Low"; reason = "Dataset is not mature enough for a reliable weight change."
@@ -58,6 +69,6 @@ def get_weight_recommendations() -> Dict[str, Any]:
         reduce = [item for item in recommendations if item.get("change", 0) < 0]
         hold = [item for item in recommendations if item.get("change", 0) == 0]
         net_change = round(sum(_to_float(item.get("change")) for item in recommendations), 2)
-        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": CURRENT_MODEL_WEIGHTS, "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "Recommendations are measured against the active v2.18.4 calibrated production weights. Future changes remain analysis-only until explicitly promoted."}
+        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": _active_model_weights(), "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "Recommendations are measured against the active v2.19.0 calibrated production weights. Recommendations are future proposals. They are only applied when the v2.19.0 promotion gate passes every safeguard."}
     except Exception as error:
         return {"success": False, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "error": str(error)}

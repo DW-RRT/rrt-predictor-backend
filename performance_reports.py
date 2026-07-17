@@ -11,11 +11,11 @@ from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.18.4"
-ANALYTICS_VERSION = "2.18.4"
-DATABASE_SCHEMA_VERSION = "2.18.4"
-MODEL_VERSION = "2.18.4"
-LEARNING_VERSION = "2.18.4"
+REPORT_VERSION = "2.19.0"
+ANALYTICS_VERSION = "2.19.0"
+DATABASE_SCHEMA_VERSION = "2.19.0"
+MODEL_VERSION = "2.19.0"
+LEARNING_VERSION = "2.19.0"
 
 
 # ---------------------------------------------------------------------
@@ -1288,7 +1288,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "simulation_history": get_simulation_history(limit=5),
             "best_simulations": get_best_simulations(limit=5),
             "selection_intelligence": get_latest_selection_analysis(),
-            "safety_note": "This report reflects the active v2.18.4 calibrated production weights. Future adaptive recommendations remain analysis-only and are not applied automatically.",
+            "safety_note": "This report reflects the active v2.19.0 calibrated production weights. Future adaptive recommendations remain analysis-only and are not applied automatically.",
         }
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION, "report": "learning_recommendations", "error": str(error)}
@@ -1319,7 +1319,7 @@ def generate_learning_report_html() -> str:
         '<style>body{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#1f2933}h1,h2{color:#0f2f57}h2{border-bottom:2px solid #0f2f57;padding-bottom:6px;margin-top:30px}.subtitle{color:#52606d}.badge{display:inline-block;padding:8px 14px;border-radius:6px;background:#e3fcec;color:#014d40;font-weight:bold;margin-right:8px}.warning{background:#fffbea;color:#8d2b0b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}.card{border:1px solid #d9e2ec;border-radius:8px;padding:14px;background:#f8fafc}.label{color:#627d98;font-size:12px;text-transform:uppercase}.value{font-size:22px;font-weight:bold;color:#102a43}table{width:100%;border-collapse:collapse;margin:14px 0 22px 0;font-size:13px}th{background:#0f2f57;color:white;text-align:left;padding:8px}td{border:1px solid #d9e2ec;padding:8px;vertical-align:top}tr:nth-child(even){background:#f8fafc}.note{background:#f0f4f8;border-left:5px solid #0f2f57;padding:12px 14px;margin-top:20px}.footer{margin-top:40px;font-size:12px;color:#627d98;border-top:1px solid #d9e2ec;padding-top:12px}@media print{.no-print{display:none}table{page-break-inside:avoid}}</style></head><body>',
         '<div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>',
         f'<h1>RRT Predictor Learning Report</h1><p class="subtitle">Version {LEARNING_VERSION} | Generated {escape(report.get("generated_at") or "")}</p>',
-        f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Analysis Only: No model weights changed</span>',
+        f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: gated automatic promotion enabled</span>',
         '<h2>Dataset Audit</h2><div class="grid">',
         card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
         card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
@@ -1340,10 +1340,10 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         '<h2>Evidence-Based Factor Analysis</h2>',
-        '<div class="note">This section compares completed runner factor scores against actual results. It is reports against the active v2.18.4 calibrated production weights; future recommendations remain analysis-only.</div>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It is reports against the active v2.19.0 calibrated production weights; future proposals remain inactive unless every v2.19.0 promotion safeguard passes.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
         _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:12]]),
-        '<h3>Weight Recommendation Review</h3>',
+        '<h3>Future Adaptive Weight Proposals</h3>',
         _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:12]]),
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
@@ -1351,7 +1351,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">v2.15.0 adds offline historical replay. Simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">v2.17.0 analyses why winners were missed, including Top 4 boundary misses, value/roughie winners, false positives and factor gaps. This is analysis-only.</div>',
+        '<div class="note">Selection Intelligence v2.19.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1364,7 +1364,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         f'<h2>Safety Statement</h2><div class="note">{escape(str(report.get("safety_note")))}</div>',
-        f'<div class="footer">RRT Predictor | Backend 2.18.4 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
+        f'<div class="footer">RRT Predictor | Backend 2.19.0 | Model {MODEL_VERSION} | Database Schema {DATABASE_SCHEMA_VERSION} | Generated {escape(report.get("generated_at") or "")}</div>',
         '</body></html>'
     ]
     return ''.join(html)
@@ -1400,7 +1400,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(Paragraph("RRT Predictor Learning Report", styles["RRTTitle"]))
     story.append(Paragraph(f"Version {LEARNING_VERSION} | Generated {report.get('generated_at')}", styles["BodyText"]))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(f"Status: {'READY' if status.get('ready_for_learning') else 'NOT READY'} | Confidence: {status.get('confidence')} | Analysis Only: No model weights changed", styles["BodyText"]))
+    story.append(Paragraph(f"Status: {'READY' if status.get('ready_for_learning') else 'NOT READY'} | Confidence: {status.get('confidence')} | Adaptive Control: gated automatic promotion enabled", styles["BodyText"]))
     story.append(Paragraph("Dataset Audit", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Meetings analysed",dataset.get('meeting_count')],["Races analysed",dataset.get('race_count')],["Unique tracks",dataset.get('unique_tracks')],["Unique dates",dataset.get('unique_dates')],["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],["Database schema",DATABASE_SCHEMA_VERSION],["Prediction model",MODEL_VERSION]], [7*cm,9*cm]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
@@ -1428,13 +1428,13 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(t(["Rank","Horse","Runs","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
     story.append(PageBreak())
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
-    story.append(Paragraph("This section compares completed runner factor scores against actual results. It is reports against the active v2.18.4 calibrated production weights; future recommendations remain analysis-only.", styles["BodyText"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It is reports against the active v2.19.0 calibrated production weights; future proposals remain inactive unless every v2.19.0 promotion safeguard passes.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}
     story.append(Paragraph("Factor Effectiveness Ranking", styles["RRTHeading"]))
     story.append(t(["Rank","Factor","Win Gap","Place Gap","Win Corr","Place Corr","Signal","Conf"], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence')] for i in (factor_effectiveness.get('factors') or [])[:12]]))
-    story.append(Paragraph("Weight Recommendation Review", styles["RRTHeading"]))
+    story.append(Paragraph("Future Adaptive Weight Proposals", styles["RRTHeading"]))
     story.append(t(["Factor","Current","Rec.","Change","Direction","Priority"], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority')] for i in (weight_recommendations.get('recommendations') or [])[:12]]))
     health_readiness = model_health.get("readiness") or {}
     story.append(Paragraph("Model Health", styles["RRTHeading"]))

@@ -1,4 +1,7 @@
 from typing import Any, Dict, List, Optional
+import time
+
+from database import fetch_one
 
 from punting_form_client import (
     get_conditions,
@@ -15,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.18.4"
-PREDICTION_TYPE = "RRT Predictor v2.18.4 - Calibrated Production Weights + Native Validation"
+MODEL_VERSION = "2.19.0"
+PREDICTION_TYPE = "RRT Predictor v2.19.0 - Calibrated Production Weights + Native Validation"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -32,6 +35,41 @@ SCORING_WEIGHTS = {
     "weight_carried": 0.03,
     "market_price": 0.14,
 }
+
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.0"}
+
+def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
+    """Load the active production weight set from PostgreSQL with a short cache."""
+    now = time.time()
+    if not force and _WEIGHT_CACHE.get("weights") and now - float(_WEIGHT_CACHE.get("loaded_at") or 0) < 60:
+        return dict(SCORING_WEIGHTS)
+    try:
+        row = fetch_one("""
+            SELECT model_version, weights_json
+            FROM rrt_model_weight_sets
+            WHERE status = 'Active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1;
+        """) or {}
+        raw = row.get("weights_json") or {}
+        mapping = {
+            "last10":"recent_form_last10", "win_place":"win_place", "track_record":"track_record",
+            "distance_record":"distance_record", "track_distance":"track_distance_record",
+            "track_condition":"track_condition_record", "trainer":"trainer_a2e", "jockey":"jockey_a2e",
+            "trainer_jockey":"trainer_jockey_a2e_combo", "barrier":"barrier",
+            "weight":"weight_carried", "market":"market_price",
+        }
+        total = sum(float(raw.get(k) or 0) for k in mapping)
+        if total > 0:
+            for source_key, target_key in mapping.items():
+                SCORING_WEIGHTS[target_key] = round(float(raw.get(source_key) or 0) / total, 8)
+            _WEIGHT_CACHE.update({"loaded_at": now, "weights": dict(SCORING_WEIGHTS), "weight_set_version": row.get("model_version") or MODEL_VERSION})
+    except Exception:
+        pass
+    return dict(SCORING_WEIGHTS)
+
+def get_active_weight_set_version() -> str:
+    return str(_WEIGHT_CACHE.get("weight_set_version") or MODEL_VERSION)
 
 PF_AI_STRATEGY = {
     "active": False,
@@ -344,6 +382,7 @@ def build_factor_capture_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
         "score_breakdown": runner.get("score_breakdown"),
         "weighted_breakdown": runner.get("weighted_breakdown"),
         "scoring_weights": SCORING_WEIGHTS,
+        "active_weight_set_version": get_active_weight_set_version(),
         "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
         "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
     }
@@ -457,6 +496,7 @@ def score_runner(
             "final_score": final_score,
             "confidence": confidence,
             "scoring_weights": SCORING_WEIGHTS,
+        "active_weight_set_version": get_active_weight_set_version(),
         },
     }
 
@@ -1257,9 +1297,10 @@ def predict_from_form_data(
             "meeting_metadata_merge": meeting_metadata_merge,
             "scratchings_merge": scratchings_merge,
             "scoring_weights": SCORING_WEIGHTS,
+        "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.18.4",
+                "version": "2.19.0",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1309,6 +1350,7 @@ def predict_from_form_data(
         "meeting_metadata_merge": meeting_metadata_merge,
         "scratchings_merge": scratchings_merge,
         "scoring_weights": SCORING_WEIGHTS,
+        "active_weight_set_version": get_active_weight_set_version(),
         "pf_ai_strategy": PF_AI_STRATEGY,
         "eligible_race_count": len(eligible_races),
         "excluded_barrier_trial_count": len(races) - len(eligible_races),
@@ -1344,7 +1386,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.18.4",
+            "version": "2.19.0",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),

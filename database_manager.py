@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.18.4"
+SCHEMA_VERSION = "2.19.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -281,23 +281,56 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
         )
 
+        execute_sql("ALTER TABLE rrt_model_weight_sets ADD COLUMN IF NOT EXISTS promoted_by_cycle_id TEXT;")
+        execute_sql("ALTER TABLE rrt_model_weight_sets ADD COLUMN IF NOT EXISTS promotion_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
+        execute_sql("ALTER TABLE rrt_model_weight_sets ADD COLUMN IF NOT EXISTS automatic_promotion BOOLEAN DEFAULT FALSE;")
+
         execute_sql(
             """
-            INSERT INTO rrt_model_weight_sets (model_version,status,weights_json,source,notes,activated_at)
+            UPDATE rrt_model_weight_sets
+            SET status = 'Rollback'
+            WHERE status = 'Active' AND model_version <> '2.19.0';
+            """
+        )
+        execute_sql(
+            """
+            INSERT INTO rrt_model_weight_sets
+                (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
-              ('2.18.3','Rollback',%s::jsonb,'RRT Predictor','Verified rollback baseline before v2.18.4 recalibration.',NULL),
-              ('2.18.4','Active',%s::jsonb,'RRT Predictor','Calibrated production weights. Automatic future promotion remains disabled.',NOW())
+              ('2.18.3','Archive',%s::jsonb,'RRT Predictor','Verified pre-calibration baseline.',NULL,FALSE),
+              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.0 adaptive operation.',NULL,FALSE),
+              ('2.19.0','Active',%s::jsonb,'RRT Predictor','Initial v2.19.0 production set. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
-              weights_json=EXCLUDED.weights_json,
+              weights_json=CASE WHEN rrt_model_weight_sets.status='Active' THEN rrt_model_weight_sets.weights_json ELSE EXCLUDED.weights_json END,
               source=EXCLUDED.source,
               notes=EXCLUDED.notes,
-              activated_at=EXCLUDED.activated_at;
+              activated_at=CASE WHEN EXCLUDED.status='Active' THEN COALESCE(rrt_model_weight_sets.activated_at,NOW()) ELSE rrt_model_weight_sets.activated_at END;
             """,
             (
                 json.dumps({"last10":15,"win_place":8,"track_record":8,"distance_record":9,"track_distance":9,"track_condition":12,"trainer":10,"jockey":8,"trainer_jockey":12,"barrier":4,"weight":2,"market":3}),
                 json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14}),
+                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14}),
             ),
+        )
+
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_weight_promotion_audit (
+                id SERIAL PRIMARY KEY,
+                promotion_id TEXT UNIQUE NOT NULL,
+                cycle_id TEXT,
+                from_weight_set TEXT,
+                to_weight_set TEXT,
+                decision TEXT NOT NULL,
+                gate_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                previous_weights_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                proposed_weights_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                applied BOOLEAN DEFAULT FALSE,
+                rollback_available BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
         )
 
         execute_sql(
@@ -354,8 +387,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.18.4",
-                "RRT Predictor v2.18.4 calibrated production weights, native full-field simulation, replay validation and selection intelligence refresh.",
+                "2.19.0",
+                "RRT Predictor v2.19.0 calibrated production weights, native full-field simulation, replay validation and selection intelligence refresh.",
                 True,
             ),
         )
@@ -378,6 +411,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_learning_cycles",
                 "rrt_factor_recommendations",
                 "rrt_model_weight_sets",
+                "rrt_weight_promotion_audit",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -633,7 +667,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.18.4",
+    model_version: str = "2.19.0",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
