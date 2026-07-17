@@ -1288,7 +1288,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "simulation_history": get_simulation_history(limit=5),
             "best_simulations": get_best_simulations(limit=5),
             "selection_intelligence": get_latest_selection_analysis(),
-            "safety_note": "This report reflects the active v2.19.0 calibrated production weights. Future adaptive recommendations remain analysis-only and are not applied automatically.",
+            "safety_note": "This report reflects the active v2.19.0 production weights. Future adaptive recommendations are applied automatically only when every configured promotion safeguard passes; otherwise they remain inactive proposals.",
         }
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION, "report": "learning_recommendations", "error": str(error)}

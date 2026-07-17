@@ -463,7 +463,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
     try:
         rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
         grouped = _group_by_race(rows)
-        current_weights = _normalise_weights(ROLLBACK_MODEL_WEIGHTS)
+        current_weights = _normalise_weights(_active_weights())
         proposed_weights = _normalise_weights(test_weights or CURRENT_MODEL_WEIGHTS)
         current_result = _evaluate_grouped_races(grouped, current_weights, 10.0, 6, 45.0)
         simulated_result = _evaluate_grouped_races(grouped, proposed_weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
@@ -504,7 +504,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             ),
             "recommendation": _simulation_recommendation(improvement),
             "notes": notes,
-            "safety_note": "Calibration evidence only. Active v2.19.0 weights are fixed in code; this endpoint does not change them.",
+            "safety_note": "Calibration evidence only. The baseline is loaded from the active PostgreSQL production weight set; this endpoint does not change it.",
         }
         if save_result:
             response["postgres_history"] = save_weight_simulation(response)
