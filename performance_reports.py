@@ -1072,182 +1072,123 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# v2.12.3 Rolling Each-Way Leaderboards
+# v2.19.1 Rolling Historical Performance Leaderboards
 # ---------------------------------------------------------------------
 
-MIN_LEADERBOARD_RUNNERS = 1
+MIN_TRAINER_RUNNERS = 10
+MIN_JOCKEY_RUNNERS = 10
+MIN_COMBINATION_RUNNERS = 5
+MIN_HORSE_RUNS = 2
 
 
 def _rank_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "rank": index,
-            **row,
-        }
-        for index, row in enumerate(rows, start=1)
-    ]
+    return [{"rank": index, **row} for index, row in enumerate(rows, start=1)]
 
 
 def get_each_way_leaderboards(
-    min_runners: int = MIN_LEADERBOARD_RUNNERS,
+    min_runners: int = MIN_TRAINER_RUNNERS,
     limit: int = 10,
 ) -> Dict[str, Any]:
+    """Return win/place leaderboards from all completed runner-factor rows."""
     try:
         totals = fetch_one(
             """
             SELECT
                 COUNT(*) AS runner_factor_rows,
-                COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS runners_with_results,
-                COUNT(*) FILTER (WHERE hit_place IS TRUE) AS placed_runners,
-                COUNT(DISTINCT meeting_id) AS meeting_count,
-                COUNT(DISTINCT track) AS track_count,
-                COUNT(DISTINCT meeting_date) AS date_count
+                COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS completed_runner_rows,
+                COUNT(*) FILTER (WHERE actual_position = 1) AS winner_rows,
+                COUNT(*) FILTER (WHERE actual_position BETWEEN 1 AND 3) AS placed_rows,
+                COUNT(DISTINCT meeting_id) FILTER (WHERE actual_position IS NOT NULL) AS meeting_count,
+                COUNT(DISTINCT track) FILTER (WHERE actual_position IS NOT NULL) AS track_count,
+                COUNT(DISTINCT meeting_date) FILTER (WHERE actual_position IS NOT NULL) AS date_count
             FROM rrt_runner_factor_snapshots;
             """
         ) or {}
 
-        trainers = fetch_all(
-            """
-            SELECT
-                NULLIF(TRIM(factor_json->>'trainer'), '') AS trainer,
-                COUNT(*) AS runner_count,
-                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
-                ROUND(
-                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
-                    2
-                ) AS each_way_place_strike_rate,
-                ROUND(AVG(final_score), 2) AS avg_final_score,
-                ROUND(AVG(confidence), 2) AS avg_confidence
-            FROM rrt_runner_factor_snapshots
-            WHERE actual_position IS NOT NULL
-              AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
-              AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
-            GROUP BY NULLIF(TRIM(factor_json->>'trainer'), '')
-            HAVING COUNT(*) >= %s
-            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
-            LIMIT %s;
-            """,
-            (min_runners, limit),
-        )
+        def entity_query(expression: str, alias: str, minimum: int):
+            return fetch_all(
+                f"""
+                SELECT
+                    {expression} AS {alias},
+                    COUNT(*) AS runner_count,
+                    SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END) AS win_count,
+                    SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS place_count,
+                    ROUND((SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS win_strike_rate,
+                    ROUND((SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS place_strike_rate,
+                    ROUND(AVG(final_score), 2) AS avg_final_score,
+                    ROUND(AVG(confidence), 2) AS avg_confidence
+                FROM rrt_runner_factor_snapshots
+                WHERE actual_position IS NOT NULL
+                  AND {expression} IS NOT NULL
+                  AND UPPER({expression}) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+                GROUP BY {expression}
+                HAVING COUNT(*) >= %s
+                ORDER BY place_strike_rate DESC, win_strike_rate DESC, place_count DESC, win_count DESC, runner_count DESC, avg_final_score DESC
+                LIMIT %s;
+                """,
+                (minimum, limit),
+            )
 
-        jockeys = fetch_all(
-            """
-            SELECT
-                NULLIF(TRIM(factor_json->>'jockey'), '') AS jockey,
-                COUNT(*) AS runner_count,
-                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
-                ROUND(
-                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
-                    2
-                ) AS each_way_place_strike_rate,
-                ROUND(AVG(final_score), 2) AS avg_final_score,
-                ROUND(AVG(confidence), 2) AS avg_confidence
-            FROM rrt_runner_factor_snapshots
-            WHERE actual_position IS NOT NULL
-              AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
-              AND UPPER(TRIM(factor_json->>'jockey')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
-            GROUP BY NULLIF(TRIM(factor_json->>'jockey'), '')
-            HAVING COUNT(*) >= %s
-            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
-            LIMIT %s;
-            """,
-            (min_runners, limit),
-        )
+        trainer_expr = "NULLIF(TRIM(factor_json->>'trainer'), '')"
+        jockey_expr = "NULLIF(TRIM(factor_json->>'jockey'), '')"
+        horse_expr = "COALESCE(NULLIF(TRIM(runner_name), ''), NULLIF(TRIM(factor_json->>'horse_name'), ''), NULLIF(TRIM(factor_json->>'runner'), ''))"
+
+        trainers = entity_query(trainer_expr, "trainer", max(int(min_runners), MIN_TRAINER_RUNNERS))
+        jockeys = entity_query(jockey_expr, "jockey", max(int(min_runners), MIN_JOCKEY_RUNNERS))
+        horses = entity_query(horse_expr, "horse", MIN_HORSE_RUNS)
 
         combinations = fetch_all(
-            """
+            f"""
             SELECT
-                CONCAT(
-                    NULLIF(TRIM(factor_json->>'trainer'), ''),
-                    ' / ',
-                    NULLIF(TRIM(factor_json->>'jockey'), '')
-                ) AS trainer_jockey_combination,
+                CONCAT({trainer_expr}, ' / ', {jockey_expr}) AS trainer_jockey_combination,
                 COUNT(*) AS runner_count,
-                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
-                ROUND(
-                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
-                    2
-                ) AS each_way_place_strike_rate,
+                SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END) AS win_count,
+                SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS place_count,
+                ROUND((SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS win_strike_rate,
+                ROUND((SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS place_strike_rate,
                 ROUND(AVG(final_score), 2) AS avg_final_score,
                 ROUND(AVG(confidence), 2) AS avg_confidence
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
-              AND NULLIF(TRIM(factor_json->>'trainer'), '') IS NOT NULL
-              AND NULLIF(TRIM(factor_json->>'jockey'), '') IS NOT NULL
-              AND UPPER(TRIM(factor_json->>'trainer')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
-              AND UPPER(TRIM(factor_json->>'jockey')) NOT IN ('N/A', 'UNKNOWN', 'NONE')
-            GROUP BY
-                NULLIF(TRIM(factor_json->>'trainer'), ''),
-                NULLIF(TRIM(factor_json->>'jockey'), '')
+              AND {trainer_expr} IS NOT NULL
+              AND {jockey_expr} IS NOT NULL
+              AND UPPER({trainer_expr}) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+              AND UPPER({jockey_expr}) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            GROUP BY {trainer_expr}, {jockey_expr}
             HAVING COUNT(*) >= %s
-            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
+            ORDER BY place_strike_rate DESC, win_strike_rate DESC, place_count DESC, win_count DESC, runner_count DESC, avg_final_score DESC
             LIMIT %s;
             """,
-            (min_runners, limit),
-        )
-
-        horses = fetch_all(
-            """
-            SELECT
-                COALESCE(
-                    NULLIF(TRIM(runner_name), ''),
-                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
-                    NULLIF(TRIM(factor_json->>'runner'), '')
-                ) AS horse,
-                COUNT(*) AS runner_count,
-                SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END) AS place_count,
-                ROUND(
-                    (SUM(CASE WHEN hit_place IS TRUE THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
-                    2
-                ) AS each_way_place_strike_rate,
-                ROUND(AVG(final_score), 2) AS avg_final_score,
-                ROUND(AVG(confidence), 2) AS avg_confidence
-            FROM rrt_runner_factor_snapshots
-            WHERE actual_position IS NOT NULL
-              AND COALESCE(
-                    NULLIF(TRIM(runner_name), ''),
-                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
-                    NULLIF(TRIM(factor_json->>'runner'), '')
-                  ) IS NOT NULL
-            GROUP BY
-                COALESCE(
-                    NULLIF(TRIM(runner_name), ''),
-                    NULLIF(TRIM(factor_json->>'horse_name'), ''),
-                    NULLIF(TRIM(factor_json->>'runner'), '')
-                )
-            HAVING COUNT(*) >= %s
-            ORDER BY each_way_place_strike_rate DESC, place_count DESC, runner_count DESC, avg_final_score DESC
-            LIMIT %s;
-            """,
-            (min_runners, limit),
+            (MIN_COMBINATION_RUNNERS, limit),
         )
 
         return {
             "success": True,
             "provider": "PostgreSQL",
-            "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.15.0",
+            "report": "rolling_historical_performance_leaderboards",
+            "leaderboard_version": "2.19.1",
             "generated_at": _now_utc_iso(),
-            "minimum_runners": min_runners,
+            "minimum_samples": {
+                "trainers": max(int(min_runners), MIN_TRAINER_RUNNERS),
+                "jockeys": max(int(min_runners), MIN_JOCKEY_RUNNERS),
+                "trainer_jockey_combinations": MIN_COMBINATION_RUNNERS,
+                "horses": MIN_HORSE_RUNS,
+            },
             "limit": limit,
-            "ranking_method": "Each-way placing success based on hit_place = true in rrt_runner_factor_snapshots.",
+            "ranking_method": "All completed runner rows; ranked by place strike rate, then win strike rate and sample size.",
             "dataset": totals,
             "top_trainers": _rank_rows(trainers),
             "top_jockeys": _rank_rows(jockeys),
             "top_trainer_jockey_combinations": _rank_rows(combinations),
             "top_horses": _rank_rows(horses),
-            "note": (
-                "These are rolling figures from v2.12.1+ factor capture rows after official results have updated. "
-                "Early figures may be volatile until more completed meetings are collected."
-            ),
+            "note": "Uses all completed historical and native full-field runner-factor records with official finishing positions. Winners are position 1; places are positions 1-3.",
         }
-
     except Exception as error:
         return {
             "success": False,
             "provider": "PostgreSQL",
-            "report": "rolling_each_way_leaderboards",
-            "leaderboard_version": "2.15.0",
+            "report": "rolling_historical_performance_leaderboards",
+            "leaderboard_version": "2.19.1",
             "error": str(error),
         }
 
@@ -1333,12 +1274,12 @@ def generate_learning_report_html() -> str:
         '<h2>Strongest Tracks</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
         '<h2>Tracks Requiring Review</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
         '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
-        '<h2>Rolling Each-Way Leaderboards</h2>',
-        '<div class="note">These leaderboards are based on completed v2.12.1+ runner factor rows where official results have been matched. Ranking is by each-way placing strike rate.</div>',
-        '<h3>Top 10 Trainers</h3>', _html_table(['Rank','Trainer','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainers') or [])[:10]]),
-        '<h3>Top 10 Jockeys</h3>', _html_table(['Rank','Jockey','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_jockeys') or [])[:10]]),
-        '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runners','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
-        '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Placed','Place Strike Rate','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
+        '<h2>Rolling Historical Performance Leaderboards</h2>',
+        '<div class="note">These leaderboards use all completed historical and native full-field runner-factor records with official finishing positions. Rankings show both win and place performance and apply minimum sample thresholds.</div>',
+        '<h3>Top 10 Trainers</h3>', _html_table(['Rank','Trainer','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainers') or [])[:10]]),
+        '<h3>Top 10 Jockeys</h3>', _html_table(['Rank','Jockey','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_jockeys') or [])[:10]]),
+        '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
+        '<h3>Top 10 Horses</h3>', _html_table(['Rank','Horse','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]),
         '<h2>Evidence-Based Factor Analysis</h2>',
         '<div class="note">This section compares completed runner factor scores against actual results. It is reports against the active v2.19.0 calibrated production weights; future proposals remain inactive unless every v2.19.0 promotion safeguard passes.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
@@ -1416,16 +1357,16 @@ def generate_learning_report_pdf_bytes() -> bytes:
 
     leaderboards = report.get("each_way_leaderboards") or {}
     story.append(PageBreak())
-    story.append(Paragraph("Rolling Each-Way Leaderboards", styles["RRTHeading"]))
-    story.append(Paragraph("These leaderboards are based on completed v2.12.1+ runner factor rows where official results have been matched. Ranking is by each-way placing strike rate.", styles["BodyText"]))
+    story.append(Paragraph("Rolling Historical Performance Leaderboards", styles["RRTHeading"]))
+    story.append(Paragraph("These leaderboards use all completed historical and native full-field runner-factor records with official finishing positions. Rankings show both win and place performance and apply minimum sample thresholds.", styles["BodyText"]))
     story.append(Paragraph("Top 10 Trainers", styles["RRTHeading"]))
-    story.append(t(["Rank","Trainer","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainers') or [])[:10]]))
+    story.append(t(["Rank","Trainer","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainers') or [])[:10]]))
     story.append(Paragraph("Top 10 Jockeys", styles["RRTHeading"]))
-    story.append(t(["Rank","Jockey","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_jockeys') or [])[:10]]))
+    story.append(t(["Rank","Jockey","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_jockeys') or [])[:10]]))
     story.append(Paragraph("Top 10 Trainer / Jockey Combinations", styles["RRTHeading"]))
-    story.append(t(["Rank","Combination","Runners","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainer_jockey_combinations') or [])[:10]]))
+    story.append(t(["Rank","Combination","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainer_jockey_combinations') or [])[:10]]))
     story.append(Paragraph("Top 10 Horses", styles["RRTHeading"]))
-    story.append(t(["Rank","Horse","Runs","Placed","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('place_count'),_pct(i.get('each_way_place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
+    story.append(t(["Rank","Horse","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:10]]))
     story.append(PageBreak())
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
     story.append(Paragraph("This section compares completed runner factor scores against actual results. It is reports against the active v2.19.0 calibrated production weights; future proposals remain inactive unless every v2.19.0 promotion safeguard passes.", styles["BodyText"]))
