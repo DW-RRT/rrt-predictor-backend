@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.19.0"
+SCHEMA_VERSION = "2.19.3"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -289,7 +289,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
             UPDATE rrt_model_weight_sets
             SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.19.0';
+            WHERE status = 'Active' AND model_version <> '2.19.3';
             """
         )
         execute_sql(
@@ -298,8 +298,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
               ('2.18.3','Archive',%s::jsonb,'RRT Predictor','Verified pre-calibration baseline.',NULL,FALSE),
-              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.0 adaptive operation.',NULL,FALSE),
-              ('2.19.0','Active',%s::jsonb,'RRT Predictor','Initial v2.19.0 production set. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
+              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.3 selection-logic operation.',NULL,FALSE),
+              ('2.19.3','Active',%s::jsonb,'RRT Predictor','v2.19.3 production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=CASE WHEN rrt_model_weight_sets.status='Active' THEN rrt_model_weight_sets.weights_json ELSE EXCLUDED.weights_json END,
@@ -387,8 +387,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.19.0",
-                "RRT Predictor v2.19.0 calibrated production weights, native full-field simulation, replay validation and selection intelligence refresh.",
+                "2.19.3",
+                "RRT Predictor v2.19.3 best-double race combination and rank 5-8 roughie selection logic.",
                 True,
             ),
         )
@@ -667,7 +667,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.19.0",
+    model_version: str = "2.19.3",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(

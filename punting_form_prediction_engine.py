@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.0"
-PREDICTION_TYPE = "RRT Predictor v2.19.0 - Calibrated Production Weights + Native Validation"
+MODEL_VERSION = "2.19.3"
+PREDICTION_TYPE = "RRT Predictor v2.19.3 - Best Double Combination + Rank 5-8 Roughies"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -36,7 +36,7 @@ SCORING_WEIGHTS = {
     "market_price": 0.14,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.0"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.3"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -525,10 +525,11 @@ def format_reason(runner: Dict[str, Any], category: str = "standard") -> str:
     reasons = []
 
     if category == "roughie":
-        if safe_int(runner.get("market_rank"), 99) >= 6:
-            reasons.append("outside the main market but still rates competitively")
-        if safe_float(runner.get("price"), 0) >= 7:
-            reasons.append("available at a value roughie price")
+        rank = safe_int(runner.get("meeting_rank"), 0)
+        if 5 <= rank <= 8:
+            reasons.append(f"ranked {rank}th overall and next in line outside the Top 4")
+        else:
+            reasons.append("rates as an outside chance beyond the Top 4")
 
     if safe_float(breakdown.get("last10_form")) >= 70:
         reasons.append("strong recent form profile")
@@ -565,6 +566,8 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "weight": runner.get("weight_kg"),
         "price": runner.get("price"),
         "market_rank": runner.get("market_rank"),
+        "meeting_rank": runner.get("meeting_rank"),
+        "selection_rank": runner.get("meeting_rank"),
         "last10": runner.get("last10"),
         "score": runner.get("score"),
         "confidence": runner.get("confidence"),
@@ -611,45 +614,63 @@ def select_roughies(
     all_ranked: List[Dict[str, Any]],
     excluded: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    excluded_ids = {
-        f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}"
+    """Return meeting ranks 5-8 after excluding the Top 4.
+
+    Roughies are outside chances rather than price-defined long shots. No odds,
+    confidence or factor-score threshold is applied. Historical performance is
+    monitored separately through results processing and reporting.
+    """
+    excluded_keys = {
+        str(runner.get("runner_key") or f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}")
         for runner in excluded
     }
 
-    roughies = []
-
+    candidates: List[Dict[str, Any]] = []
     for runner in all_ranked:
-        runner_id = f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}"
-
-        if runner_id in excluded_ids:
+        key = str(runner.get("runner_key") or f"{runner.get('race_id')}|{runner.get('tab_number')}|{runner.get('horse_name')}")
+        if key in excluded_keys:
             continue
+        candidates.append(runner)
+        if len(candidates) >= 4:
+            break
 
-        market_rank = safe_int(runner.get("market_rank"), 99)
-        score = safe_float(runner.get("score"), 0)
-        price = safe_float(runner.get("price"), 0)
+    return candidates
 
-        if price > 0 and price >= 7 and market_rank >= 5 and score >= 50:
-            roughies.append(runner)
 
-    return sorted(
-        roughies,
-        key=lambda item: (
-            safe_float(item.get("score"), 0),
-            safe_float(item.get("price"), 0),
-        ),
-        reverse=True,
-    )[:4]
+def _double_leg_strength(ranked: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Calculate a race-leg strength score from the leading selection."""
+    if not ranked:
+        return {"leg_strength": 0.0, "top_score": 0.0, "top_confidence": 0.0, "score_margin": 0.0}
+
+    top_score = safe_float(ranked[0].get("score"), 0.0)
+    top_confidence = safe_float(ranked[0].get("confidence"), 0.0)
+    second_score = safe_float(ranked[1].get("score"), top_score) if len(ranked) > 1 else top_score
+    score_margin = max(0.0, top_score - second_score)
+
+    # Score and confidence carry most of the signal; separation from the next
+    # runner rewards races with a clearer leading selection.
+    leg_strength = clamp(
+        (top_score * 0.55)
+        + (top_confidence * 0.35)
+        + (clamp(score_margin * 8.0, 0.0, 100.0) * 0.10)
+    )
+    return {
+        "leg_strength": round(leg_strength, 2),
+        "top_score": round(top_score, 2),
+        "top_confidence": round(top_confidence, 2),
+        "score_margin": round(score_margin, 2),
+    }
 
 
 def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
-    ranked_races = []
+    ranked_races: List[Dict[str, Any]] = []
 
     for race in races:
         ranked = score_race(race)
-
         if not ranked:
             continue
 
+        strength = _double_leg_strength(ranked)
         ranked_races.append(
             {
                 "race_id": race.get("race_id"),
@@ -658,21 +679,58 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "race_name": race.get("race_name"),
                 "race_title": f"Race {race.get('race_number')} – {race.get('race_name')}",
                 "distance_m": race.get("distance_m"),
-                "selections": [
-                    format_runner(runner)
-                    for runner in ranked[:3]
-                ],
+                "leg_strength": strength.get("leg_strength"),
+                "top_score": strength.get("top_score"),
+                "top_confidence": strength.get("top_confidence"),
+                "score_margin": strength.get("score_margin"),
+                "selections": [format_runner(runner) for runner in ranked[:3]],
             }
         )
 
+    double_candidates: List[Dict[str, Any]] = []
+    for first_index in range(len(ranked_races)):
+        for second_index in range(first_index + 1, len(ranked_races)):
+            first = ranked_races[first_index]
+            second = ranked_races[second_index]
+            first_strength = safe_float(first.get("leg_strength"), 0.0) / 100.0
+            second_strength = safe_float(second.get("leg_strength"), 0.0) / 100.0
+            combined_probability = first_strength * second_strength
+            combined_score = (combined_probability ** 0.5) * 100.0
+            double_candidates.append(
+                {
+                    "legs": [first, second],
+                    "combined_score": round(combined_score, 2),
+                    "combined_probability_index": round(combined_probability * 100.0, 2),
+                }
+            )
+
+    best_double_candidate = max(
+        double_candidates,
+        key=lambda item: (
+            safe_float(item.get("combined_score"), 0.0),
+            -safe_int((item.get("legs") or [{}])[0].get("race_number"), 999),
+        ),
+        default=None,
+    )
+
+    # Quadrella behaviour is unchanged in v2.19.3. It remains the first four
+    # eligible races in meeting order.
+    quaddie_legs = sorted(
+        ranked_races,
+        key=lambda item: safe_int(item.get("race_number"), 999),
+    )[:4]
+
     return {
         "best_double": {
-            "legs": ranked_races[:2],
-            "status": "Active" if len(ranked_races) >= 2 else "Awaiting enough eligible races",
+            "legs": (best_double_candidate or {}).get("legs") or [],
+            "combined_score": (best_double_candidate or {}).get("combined_score"),
+            "combined_probability_index": (best_double_candidate or {}).get("combined_probability_index"),
+            "selection_method": "Highest-rated two-race combination across all eligible races",
+            "status": "Active" if best_double_candidate else "Awaiting enough eligible races",
         },
         "best_quaddie": {
-            "legs": ranked_races[:4],
-            "status": "Active" if len(ranked_races) >= 4 else "Awaiting enough eligible races",
+            "legs": quaddie_legs,
+            "status": "Active" if len(quaddie_legs) >= 4 else "Awaiting enough eligible races",
         },
     }
 
@@ -1283,6 +1341,8 @@ def predict_from_form_data(
         key=lambda item: item.get("score", 0),
         reverse=True,
     )
+    for meeting_rank, runner in enumerate(all_ranked, start=1):
+        runner["meeting_rank"] = meeting_rank
 
     if not all_ranked:
         return {
@@ -1300,7 +1360,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.0",
+                "version": "2.19.3",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1309,9 +1369,8 @@ def predict_from_form_data(
         }
 
     top_4_win = all_ranked[:4]
-    top_4_each_way = all_ranked[4:8] if len(all_ranked) >= 8 else all_ranked[:4]
-    excluded_for_roughies = top_4_win + top_4_each_way
-    top_4_roughies = select_roughies(all_ranked, excluded_for_roughies)
+    top_4_each_way = all_ranked[:4]
+    top_4_roughies = select_roughies(all_ranked, top_4_each_way)
 
     multis = build_multis(eligible_races)
 
@@ -1381,12 +1440,12 @@ def predict_from_form_data(
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
                 "PF AI ratings are merged for comparison only and are not yet used in scoring. "
-                "Roughies require price >= 10, price > 0 and market rank >= 6. "
+                "Roughies are the next four ranked runners (positions 5-8) outside the Top 4, with no odds, confidence or score threshold. "
                 "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
         },
         "factor_capture": {
-            "version": "2.19.0",
+            "version": "2.19.3",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
