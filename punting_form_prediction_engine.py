@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.3"
-PREDICTION_TYPE = "RRT Predictor v2.19.3 - Best Double Combination + Rank 5-8 Roughies"
+MODEL_VERSION = "2.19.4"
+PREDICTION_TYPE = "RRT Predictor v2.19.4 - Best Double + Best Four-Leg Multi + Rank 5-8 Roughies"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -36,7 +36,7 @@ SCORING_WEIGHTS = {
     "market_price": 0.14,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.3"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.4"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -713,12 +713,45 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
         default=None,
     )
 
-    # Quadrella behaviour is unchanged in v2.19.3. It remains the first four
-    # eligible races in meeting order.
-    quaddie_legs = sorted(
-        ranked_races,
-        key=lambda item: safe_int(item.get("race_number"), 999),
-    )[:4]
+    quaddie_candidates: List[Dict[str, Any]] = []
+    race_count = len(ranked_races)
+    for first_index in range(race_count):
+        for second_index in range(first_index + 1, race_count):
+            for third_index in range(second_index + 1, race_count):
+                for fourth_index in range(third_index + 1, race_count):
+                    legs = [
+                        ranked_races[first_index],
+                        ranked_races[second_index],
+                        ranked_races[third_index],
+                        ranked_races[fourth_index],
+                    ]
+                    strengths = [
+                        safe_float(leg.get("leg_strength"), 0.0) / 100.0
+                        for leg in legs
+                    ]
+                    combined_probability = 1.0
+                    for strength in strengths:
+                        combined_probability *= strength
+                    combined_score = (combined_probability ** 0.25) * 100.0
+                    quaddie_candidates.append(
+                        {
+                            "legs": legs,
+                            "combined_score": round(combined_score, 2),
+                            "combined_probability_index": round(combined_probability * 100.0, 4),
+                        }
+                    )
+
+    best_quaddie_candidate = max(
+        quaddie_candidates,
+        key=lambda item: (
+            safe_float(item.get("combined_score"), 0.0),
+            tuple(
+                -safe_int(leg.get("race_number"), 999)
+                for leg in (item.get("legs") or [])
+            ),
+        ),
+        default=None,
+    )
 
     return {
         "best_double": {
@@ -729,8 +762,12 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
             "status": "Active" if best_double_candidate else "Awaiting enough eligible races",
         },
         "best_quaddie": {
-            "legs": quaddie_legs,
-            "status": "Active" if len(quaddie_legs) >= 4 else "Awaiting enough eligible races",
+            "legs": (best_quaddie_candidate or {}).get("legs") or [],
+            "combined_score": (best_quaddie_candidate or {}).get("combined_score"),
+            "combined_probability_index": (best_quaddie_candidate or {}).get("combined_probability_index"),
+            "selection_method": "Highest-rated four-race combination across all eligible races",
+            "multi_type": "RRT best four-leg multi",
+            "status": "Active" if best_quaddie_candidate else "Awaiting enough eligible races",
         },
     }
 
@@ -1360,7 +1397,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.3",
+                "version": "2.19.4",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1445,7 +1482,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.19.3",
+            "version": "2.19.4",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
