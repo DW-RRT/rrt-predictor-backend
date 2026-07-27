@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.19.0"
-MODEL_VERSION = "2.19.0"
+REPLAY_VERSION = "2.19.5"
+MODEL_VERSION = "2.19.5"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -21,6 +21,7 @@ ROLLBACK_WEIGHTS: Dict[str, float] = {
     "barrier": 0.04,
     "weight": 0.02,
     "market": 0.03,
+    "speed": 0.0,
 }
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
@@ -36,6 +37,7 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "barrier": 0.04,
     "weight": 0.03,
     "market": 0.14,
+    "speed": 0.0,
 }
 
 FACTOR_COLUMNS = {
@@ -51,6 +53,7 @@ FACTOR_COLUMNS = {
     "barrier": "barrier_score",
     "weight": "weight_score",
     "market": "market_score",
+    "speed": "speed_score",
 }
 
 
@@ -92,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -101,7 +104,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
                last10_score, win_place_score, track_record_score,
                distance_record_score, track_distance_record_score,
                track_condition_score, trainer_score, jockey_score,
-               trainer_jockey_score, barrier_score, weight_score, market_score
+               trainer_jockey_score, barrier_score, weight_score, market_score, speed_score
         FROM rrt_runner_factor_snapshots
         WHERE {' AND '.join(clauses)}
         ORDER BY meeting_date, meeting_id, race_number, runner_key;
@@ -154,7 +157,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.19.0 calibrated replay",
+    replay_name: str = "v2.19.5 production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -168,9 +171,10 @@ def run_historical_replay(
         weights = _normalise_weights(test_weights)
         rows = _dataset(min_meeting_date, max_meeting_date, model_version)
         groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]] = {}
-        rollback_weights = _normalise_weights(ROLLBACK_WEIGHTS)
+        active_row=fetch_one("SELECT weights_json FROM rrt_model_weight_sets WHERE status='Active' ORDER BY activated_at DESC NULLS LAST,created_at DESC LIMIT 1;") or {}
+        current_weights = _normalise_weights(active_row.get("weights_json") or DEFAULT_WEIGHTS)
         for row in rows:
-            row["current_score"] = _score(row, rollback_weights)
+            row["current_score"] = _score(row, current_weights)
             row["replay_score"] = _score(row, weights)
             groups.setdefault(_race_key(row), []).append(row)
         current = _metrics(groups, "current_score", roughie_min_price, roughie_min_market_rank)
@@ -187,7 +191,7 @@ def run_historical_replay(
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "dataset": {"runner_count": len(rows), "race_count": len(groups), "meeting_count": len({r.get('meeting_id') for r in rows}),
                         "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
-            "current_weights": rollback_weights, "replay_weights": weights,
+            "production_weights": current_weights, "candidate_weights": weights,
             "roughie_rules": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank},
             "current_metrics": {k: v for k, v in current.items() if k != "selections"},
             "replay_metrics": {k: v for k, v in replay.items() if k != "selections"},
@@ -205,7 +209,7 @@ def run_historical_replay(
                  replay_weights_json, current_metrics_json, replay_metrics_json, improvement_json, replay_json)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
                 (replay_id, replay_name, REPLAY_VERSION, model_version, min_meeting_date, max_meeting_date,
-                 len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(rollback_weights),
+                 len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(current_weights),
                  json.dumps(weights), json.dumps(result["current_metrics"]), json.dumps(result["replay_metrics"]),
                  json.dumps(improvement), json.dumps(result, default=str)),
             )

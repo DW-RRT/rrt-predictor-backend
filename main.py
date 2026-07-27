@@ -62,6 +62,9 @@ from database_manager import (
     load_prediction_snapshot as load_prediction_snapshot_from_postgres,
     get_pending_prediction_snapshots_for_results,
     get_results_processor_summary,
+    save_speed_ratings_from_results,
+    backfill_speed_ratings_from_saved_results,
+    get_speed_rating_summary,
 )
 
 from database import execute_sql, fetch_one, fetch_all
@@ -134,7 +137,7 @@ from adaptive_learning_engine import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.19.4",
+    version="2.19.5",
 )
 
 app.add_middleware(
@@ -839,10 +842,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.19.4",
+        "version": "2.19.5",
         "app_version": "1.0.0",
-        "backend_version": "2.19.4",
-        "model_version": "2.19.4",
+        "backend_version": "2.19.5",
+        "model_version": "2.19.5",
     }
 
 
@@ -852,10 +855,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.19.4",
+        "version": "2.19.5",
         "app_version": "1.0.0",
-        "backend_version": "2.19.4",
-        "model_version": "2.19.4",
+        "backend_version": "2.19.5",
+        "model_version": "2.19.5",
         "cache_ttl_seconds": 300
     }
 
@@ -895,6 +898,8 @@ def api_route_check():
         "/api/learning/report-html": True,
         "/api/learning/report-pdf": True,
         "/api/factor-capture/summary": True,
+        "/api/speed-rating/summary": True,
+        "/api/speed-rating/backfill": True,
         "/api/learning/each-way-leaderboards": True,
         "/api/results-processor/status": True,
         "/api/results-processor/run": True,
@@ -936,11 +941,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.19.4",
+        "version": "2.19.5",
         "app_version": "1.0.0",
-        "backend_version": "2.19.4",
-        "model_version": "2.19.4",
-        "database_schema_version": "2.19.4",
+        "backend_version": "2.19.5",
+        "model_version": "2.19.5",
+        "database_schema_version": "2.19.5",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -1229,7 +1234,7 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_19_3.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_19_5.pdf"
         },
     )
 
@@ -1237,6 +1242,16 @@ def api_learning_report_pdf():
 # ---------------------------------------------------------------------
 # Factor Capture Routes - RRT Predictor v2.17.0
 # ---------------------------------------------------------------------
+
+@app.get("/api/speed-rating/summary")
+def api_speed_rating_summary():
+    return get_speed_rating_summary()
+
+
+@app.get("/api/speed-rating/backfill")
+def api_speed_rating_backfill(limit: int = Query(500)):
+    return backfill_speed_ratings_from_saved_results(limit=limit)
+
 
 @app.get("/api/factor-capture/summary")
 def api_factor_capture_summary():
@@ -1296,6 +1311,7 @@ def api_simulator_run(
     barrier: Optional[float] = Query(None),
     weight: Optional[float] = Query(None),
     market: Optional[float] = Query(None),
+    speed: Optional[float] = Query(None),
 ):
     test_weights = {
         key: value
@@ -1312,6 +1328,7 @@ def api_simulator_run(
             "barrier": barrier,
             "weight": weight,
             "market": market,
+            "speed": speed,
         }.items()
         if value is not None
     }
@@ -1368,12 +1385,12 @@ def api_model_weights():
     rollback = fetch_one("SELECT model_version,weights_json,source,notes,activated_at FROM rrt_model_weight_sets WHERE status='Rollback' ORDER BY created_at DESC LIMIT 1;") or {}
     active_weights = active.get("weights_json") or {}
     rollback_weights = rollback.get("weights_json") or {}
-    return {"success":True,"model_version":"2.19.4","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":os.getenv("RRT_AUTO_WEIGHT_PROMOTION_ENABLED","true").lower()=="true","last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
+    return {"success":True,"model_version":"2.19.5","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":os.getenv("RRT_AUTO_WEIGHT_PROMOTION_ENABLED","true").lower()=="true","last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
 
 @app.get("/api/model/promotion-audit")
 def api_model_promotion_audit(limit: int = Query(20)):
     rows = fetch_all("SELECT promotion_id,cycle_id,from_weight_set,to_weight_set,decision,applied,rollback_available,created_at FROM rrt_weight_promotion_audit ORDER BY created_at DESC LIMIT %s;", (max(1,min(limit,100)),))
-    return {"success":True,"model_version":"2.19.4","audit_count":len(rows),"audits":rows}
+    return {"success":True,"model_version":"2.19.5","audit_count":len(rows),"audits":rows}
 
 @app.get("/api/model/rollback")
 def api_model_rollback():
@@ -1440,12 +1457,12 @@ def api_selection_intelligence_category_analysis():
 
 
 # ---------------------------------------------------------------------
-# Native Adaptive Learning Routes - RRT Predictor v2.19.4
+# Native Adaptive Learning Routes - RRT Predictor v2.19.5
 # ---------------------------------------------------------------------
 
 @app.get("/api/adaptive-learning/run")
 def api_adaptive_learning_run(
-    cycle_name: str = Query("v2.19.4 autonomous adaptive learning cycle"),
+    cycle_name: str = Query("v2.19.5 autonomous adaptive learning cycle"),
 ):
     return run_adaptive_learning_cycle(cycle_name=cycle_name, save_result=True)
 
@@ -1476,7 +1493,7 @@ def api_adaptive_learning_summary():
 
 @app.get("/api/replay/run")
 def api_replay_run(
-    replay_name: str = Query("v2.19.4 calibrated replay"),
+    replay_name: str = Query("v2.19.5 production-versus-candidate replay"),
     min_meeting_date: Optional[str] = Query(None),
     max_meeting_date: Optional[str] = Query(None),
     model_version: Optional[str] = Query(None),
@@ -1495,6 +1512,7 @@ def api_replay_run(
     barrier: Optional[float] = Query(None),
     weight: Optional[float] = Query(None),
     market: Optional[float] = Query(None),
+    speed: Optional[float] = Query(None),
 ):
     test_weights = {
         key: value for key, value in {
@@ -1503,6 +1521,7 @@ def api_replay_run(
             "track_condition": track_condition, "trainer": trainer, "jockey": jockey,
             "trainer_jockey": trainer_jockey, "barrier": barrier, "weight": weight,
             "market": market,
+            "speed": speed,
         }.items() if value is not None
     }
     return run_historical_replay(
@@ -1906,8 +1925,7 @@ def _simplify_punting_form_results(api_response: Dict[str, Any]) -> Dict[str, An
                     "barrier": runner.get("barrier"),
                     "weight": runner.get("weight"),
                     "price": runner.get("price"),
-                    "in_run": runner.get("inRun"),
-                    "flucs": runner.get("flucs"),
+                                        "flucs": runner.get("flucs"),
                     "gear_changes": runner.get("gearChanges"),
                     "raw": runner,
                 }
@@ -1981,7 +1999,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.19.4",
+        "model_version": "2.19.5",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2292,7 +2310,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
     if not prediction_snapshot:
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
-            model_version="2.19.4",
+            model_version="2.19.5",
         )
 
         if not postgres_prediction.get("success"):
@@ -2342,6 +2360,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
         }
 
     results_postgres_save = save_results_snapshot_to_postgres(simplified_results)
+    speed_rating_update = save_speed_ratings_from_results(simplified_results)
     factor_result_update = update_runner_factor_results_from_results(
         prediction_snapshot=prediction_snapshot,
         results_snapshot=simplified_results,
@@ -2358,6 +2377,7 @@ def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
         performance_response["postgres_history"] = {
             "results_saved": results_postgres_save,
             "factor_results_updated": factor_result_update,
+            "speed_ratings_updated": speed_rating_update,
             "performance_saved": save_performance_snapshot_to_postgres(
                 performance_response
             ),
@@ -2576,7 +2596,7 @@ def api_punting_form_predict(
                 "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
                 "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
                 "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.19.4 native full-field PostgreSQL factor analysis, automatic results processing, and persistent learning.",
+                "note": "Prediction snapshot and runner-level factor capture stored for v2.19.5 native full-field PostgreSQL factor analysis, automatic results processing, and persistent learning.",
             }
 
         return prediction_response

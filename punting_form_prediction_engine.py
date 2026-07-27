@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.4"
-PREDICTION_TYPE = "RRT Predictor v2.19.4 - Best Double + Best Four-Leg Multi + Rank 5-8 Roughies"
+MODEL_VERSION = "2.19.5"
+PREDICTION_TYPE = "RRT Predictor v2.19.5 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -34,9 +34,10 @@ SCORING_WEIGHTS = {
     "barrier": 0.04,
     "weight_carried": 0.03,
     "market_price": 0.14,
+    "speed_rating": 0.00,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.4"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -57,7 +58,7 @@ def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
             "distance_record":"distance_record", "track_distance":"track_distance_record",
             "track_condition":"track_condition_record", "trainer":"trainer_a2e", "jockey":"jockey_a2e",
             "trainer_jockey":"trainer_jockey_a2e_combo", "barrier":"barrier",
-            "weight":"weight_carried", "market":"market_price",
+            "weight":"weight_carried", "market":"market_price", "speed":"speed_rating",
         }
         total = sum(float(raw.get(k) or 0) for k in mapping)
         if total > 0:
@@ -334,6 +335,55 @@ def _runner_factor_key(
     return f"race:{race_id or race_number}|tab:{tab_number}|name:{runner_name}"
 
 
+
+def get_normalised_speed_rating(runner_id: Any) -> Dict[str, Any]:
+    """Return a pre-race rolling speed profile derived only from prior official results."""
+    rid = safe_int(runner_id, 0)
+    if rid <= 0:
+        return {"score":50.0,"completed_runs":0,"source":"neutral_no_history"}
+    try:
+        row = fetch_one("""SELECT completed_runs,latest_speed_score,avg_last3_speed_score,avg_last5_speed_score,
+            best_speed_score,speed_consistency,latest_run_date FROM rrt_runner_speed_profiles WHERE runner_id=%s;""", (rid,)) or {}
+        runs=safe_int(row.get("completed_runs"),0)
+        if runs <= 0:
+            return {"score":50.0,"completed_runs":0,"source":"neutral_no_history"}
+        score = (safe_float(row.get("avg_last3_speed_score"),50)*0.55 + safe_float(row.get("avg_last5_speed_score"),50)*0.25 +
+                 safe_float(row.get("best_speed_score"),50)*0.10 + safe_float(row.get("speed_consistency"),50)*0.10)
+        return {"score":round(clamp(score),1),"completed_runs":runs,"latest_speed_score":row.get("latest_speed_score"),
+                "avg_last3":row.get("avg_last3_speed_score"),"avg_last5":row.get("avg_last5_speed_score"),
+                "best":row.get("best_speed_score"),"consistency":row.get("speed_consistency"),
+                "latest_run_date":row.get("latest_run_date"),"source":"official_race_time_history"}
+    except Exception:
+        return {"score":50.0,"completed_runs":0,"source":"neutral_lookup_error"}
+
+
+def score_each_way_profile(runner: Dict[str, Any]) -> float:
+    b=runner.get("score_breakdown") or {}
+    return round(clamp(safe_float(runner.get("score"))*0.25 + safe_float(b.get("win_place"))*0.25 +
+        safe_float(b.get("last10_form"))*0.18 + safe_float(b.get("speed_rating"))*0.12 +
+        ((safe_float(b.get("distance_record"))+safe_float(b.get("track_condition_record")))/2)*0.10 +
+        safe_float(b.get("market_price"))*0.10),2)
+
+
+def score_roughie_profile(runner: Dict[str, Any]) -> float:
+    b=runner.get("score_breakdown") or {}; price=safe_float(runner.get("price"),0)
+    value = 75.0 if 7 <= price <= 20 else 65.0 if 20 < price <= 40 else 50.0 if price > 40 else 35.0
+    return round(clamp(safe_float(runner.get("score"))*0.28 + safe_float(b.get("last10_form"))*0.18 +
+        safe_float(b.get("speed_rating"))*0.16 + safe_float(b.get("win_place"))*0.14 +
+        safe_float(b.get("track_record"))*0.09 + value*0.15),2)
+
+
+def select_each_way_distinct(all_ranked: List[Dict[str, Any]], top_win: List[Dict[str, Any]], limit: int=4, max_overlap: int=2) -> List[Dict[str, Any]]:
+    win_keys={r.get("runner_key") for r in top_win}; ranked=sorted(all_ranked,key=lambda r:r.get("each_way_score",0),reverse=True)
+    selected=[r for r in ranked if r.get("runner_key") not in win_keys][:max(0,limit-max_overlap)]
+    for r in ranked:
+        if len(selected)>=limit: break
+        if r.get("runner_key") in {x.get("runner_key") for x in selected}: continue
+        if r.get("runner_key") in win_keys and sum(1 for x in selected if x.get("runner_key") in win_keys)>=max_overlap: continue
+        selected.append(r)
+    return selected[:limit]
+
+
 def build_weighted_breakdown(score_breakdown: Dict[str, Any]) -> Dict[str, float]:
     weighted = {
         "last10_form": safe_float(score_breakdown.get("last10_form")) * SCORING_WEIGHTS["recent_form_last10"],
@@ -348,6 +398,7 @@ def build_weighted_breakdown(score_breakdown: Dict[str, Any]) -> Dict[str, float
         "barrier": safe_float(score_breakdown.get("barrier")) * SCORING_WEIGHTS["barrier"],
         "weight": safe_float(score_breakdown.get("weight")) * SCORING_WEIGHTS["weight_carried"],
         "market_price": safe_float(score_breakdown.get("market_price")) * SCORING_WEIGHTS["market_price"],
+        "speed_rating": safe_float(score_breakdown.get("speed_rating")) * SCORING_WEIGHTS["speed_rating"],
     }
 
     return {
@@ -378,11 +429,15 @@ def build_factor_capture_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
         "price": runner.get("price"),
         "market_rank": runner.get("market_rank"),
         "score": runner.get("score"),
+        "win_score": runner.get("win_score"),
+        "each_way_score": runner.get("each_way_score"),
+        "roughie_score": runner.get("roughie_score"),
         "confidence": runner.get("confidence"),
         "score_breakdown": runner.get("score_breakdown"),
         "weighted_breakdown": runner.get("weighted_breakdown"),
         "scoring_weights": SCORING_WEIGHTS,
         "active_weight_set_version": get_active_weight_set_version(),
+        "speed_profile": runner.get("speed_profile"),
         "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
         "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
     }
@@ -422,6 +477,8 @@ def score_runner(
     barrier_score = score_barrier(runner.get("barrier"), field_size)
     weight_score = score_weight(runner.get("weight_kg"))
     market_score = score_price(runner.get("price_sp"))
+    speed_profile = get_normalised_speed_rating(runner.get("runner_id"))
+    speed_score = safe_float(speed_profile.get("score"), 50.0)
 
     final_score = (
         last10_score * SCORING_WEIGHTS["recent_form_last10"]
@@ -436,6 +493,7 @@ def score_runner(
         + barrier_score * SCORING_WEIGHTS["barrier"]
         + weight_score * SCORING_WEIGHTS["weight_carried"]
         + market_score * SCORING_WEIGHTS["market_price"]
+        + speed_score * SCORING_WEIGHTS["speed_rating"]
     )
 
     final_score = round(clamp(final_score), 1)
@@ -467,6 +525,7 @@ def score_runner(
         "barrier": round(barrier_score, 1),
         "weight": round(weight_score, 1),
         "market_price": round(market_score, 1),
+        "speed_rating": round(speed_score, 1),
     }
 
     weighted_breakdown = build_weighted_breakdown(score_breakdown)
@@ -489,6 +548,7 @@ def score_runner(
         "pf_ai_strategy": PF_AI_STRATEGY,
         "score_breakdown": score_breakdown,
         "weighted_breakdown": weighted_breakdown,
+        "speed_profile": speed_profile,
         "factor_capture": {
             "runner_key": _runner_factor_key(runner, race),
             "raw_component_scores": score_breakdown,
@@ -546,6 +606,9 @@ def format_reason(runner: Dict[str, Any], category: str = "standard") -> str:
     if safe_float(breakdown.get("barrier")) >= 80:
         reasons.append("favourable barrier")
 
+    if safe_float(breakdown.get("speed_rating")) >= 70:
+        reasons.append("strong normalised speed profile")
+
     if safe_float(breakdown.get("market_price")) >= 80 and category != "roughie":
         reasons.append("well supported in the market")
 
@@ -570,6 +633,9 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "selection_rank": runner.get("meeting_rank"),
         "last10": runner.get("last10"),
         "score": runner.get("score"),
+        "win_score": runner.get("win_score"),
+        "each_way_score": runner.get("each_way_score"),
+        "roughie_score": runner.get("roughie_score"),
         "confidence": runner.get("confidence"),
 
         "race_id": runner.get("race_id"),
@@ -1397,7 +1463,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.4",
+                "version": "2.19.5",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1405,9 +1471,14 @@ def predict_from_form_data(
             },
         }
 
-    top_4_win = all_ranked[:4]
-    top_4_each_way = all_ranked[:4]
-    top_4_roughies = select_roughies(all_ranked, top_4_each_way)
+    for runner in all_ranked:
+        runner["win_score"] = safe_float(runner.get("score"))
+        runner["each_way_score"] = score_each_way_profile(runner)
+        runner["roughie_score"] = score_roughie_profile(runner)
+    top_4_win = sorted(all_ranked, key=lambda r:r.get("win_score",0), reverse=True)[:4]
+    top_4_each_way = select_each_way_distinct(all_ranked, top_4_win, limit=4, max_overlap=2)
+    excluded_selection_keys = {r.get("runner_key") for r in top_4_win + top_4_each_way}
+    top_4_roughies = [r for r in sorted(all_ranked,key=lambda r:r.get("roughie_score",0),reverse=True) if r.get("runner_key") not in excluded_selection_keys][:4]
 
     multis = build_multis(eligible_races)
 
@@ -1482,7 +1553,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.19.4",
+            "version": "2.19.5",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),

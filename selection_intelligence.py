@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.19.4"
-MODEL_VERSION = "2.19.4"
+SELECTION_INTELLIGENCE_VERSION = "2.19.5"
+MODEL_VERSION = "2.19.5"
 
 
 FACTOR_COLUMNS = [
@@ -22,6 +22,7 @@ FACTOR_COLUMNS = [
     ("barrier_score", "Barrier"),
     ("weight_score", "Weight Carried"),
     ("market_score", "Market"),
+    ("speed_score", "Normalised Speed Rating"),
 ]
 
 
@@ -55,7 +56,7 @@ def _load_completed_rows(
         "actual_position IS NOT NULL",
         "meeting_id IS NOT NULL",
         "race_number IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5')",
     ]
     params: List[Any] = []
 
@@ -75,7 +76,7 @@ def _load_completed_rows(
             market_price, market_rank, last10_score, win_place_score,
             track_record_score, distance_record_score, track_distance_record_score,
             track_condition_score, trainer_score, jockey_score, trainer_jockey_score,
-            barrier_score, weight_score, market_score, actual_position, actual_price,
+            barrier_score, weight_score, market_score, speed_score, actual_position, actual_price,
             hit_win, hit_place, factor_json
         FROM rrt_runner_factor_snapshots
         WHERE {" AND ".join(where_parts)}
@@ -293,7 +294,7 @@ def _build_selection_recommendations(
             "area": "Top 4 Boundary",
             "recommendation": "Test a Top 4 boundary promotion rule for runners ranked 5th to 8th where factor evidence is strong.",
             "evidence": f"{near_miss_count} races had winners ranked 5th to 8th.",
-            "next_step": "v2.19.4 should simulate controlled promotion rules before production use.",
+            "next_step": "v2.19.5 should simulate controlled promotion rules before production use.",
         })
 
     if boundary_rate >= 0.04:
@@ -331,7 +332,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} should influence selection promotion more strongly.",
                 "evidence": f"Missed winners averaged {avg_gap} points stronger than Top 4 selections on this factor.",
-                "next_step": "Use v2.19.4 promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
+                "next_step": "Use v2.19.5 promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
             })
         elif avg_gap <= -3:
             recommendations.append({
@@ -339,7 +340,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} is suppressing winners or over-rewarding false positives.",
                 "evidence": f"Missed winners averaged {avg_gap} points weaker than Top 4 selections on this factor.",
-                "next_step": "Use v2.19.4 promotion-gate simulation to test controlled reduction or gating rules.",
+                "next_step": "Use v2.19.5 promotion-gate simulation to test controlled reduction or gating rules.",
             })
 
     if not recommendations:
@@ -502,7 +503,7 @@ def get_latest_selection_analysis() -> Dict[str, Any]:
             SELECT MAX(updated_at) AS latest_completed_at
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
-              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4');
+              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5');
         """) or {}
         if (not row) or (latest_native.get("latest_completed_at") and row.get("generated_at") and row.get("generated_at") < latest_native.get("latest_completed_at")):
             return run_selection_intelligence_analysis(save_result=True)

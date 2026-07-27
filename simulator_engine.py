@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.19.4"
-MODEL_VERSION = "2.19.4"
+SIMULATOR_VERSION = "2.19.5"
+MODEL_VERSION = "2.19.5"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -22,6 +22,7 @@ CURRENT_MODEL_WEIGHTS = {
     "barrier": 4.0,
     "weight": 3.0,
     "market": 14.0,
+    "speed": 0.0,
 }
 
 ROLLBACK_MODEL_WEIGHTS = {
@@ -37,6 +38,7 @@ ROLLBACK_MODEL_WEIGHTS = {
     "barrier": 4.0,
     "weight": 2.0,
     "market": 3.0,
+    "speed": 0.0,
 }
 
 
@@ -54,10 +56,15 @@ DEFAULT_TEST_WEIGHTS = {
     "barrier": 4.0,
     "weight": 5.0,
     "market": 14.0,
+    "speed": 0.0,
 }
 
 
 DEFAULT_SINGLE_FACTOR_SUITE = [
+    {"factor":"speed","change":3.0,"label":"Speed Rating +3"},
+    {"factor":"speed","change":5.0,"label":"Speed Rating +5"},
+    {"factor":"speed","change":7.0,"label":"Speed Rating +7"},
+    {"factor":"speed","change":10.0,"label":"Speed Rating +10"},
     {"factor": "market", "change": 1.0, "label": "Market +1"},
     {"factor": "market", "change": 2.0, "label": "Market +2"},
     {"factor": "market", "change": 3.0, "label": "Market +3"},
@@ -110,6 +117,7 @@ FACTOR_SCORE_COLUMNS = {
     "barrier": "barrier_score",
     "weight": "weight_score",
     "market": "market_score",
+    "speed": "speed_score",
 }
 
 
@@ -172,7 +180,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -188,7 +196,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
                market_price, market_rank, last10_score, win_place_score,
                track_record_score, distance_record_score, track_distance_record_score,
                track_condition_score, trainer_score, jockey_score, trainer_jockey_score,
-               barrier_score, weight_score, market_score, actual_position, actual_price,
+               barrier_score, weight_score, market_score, speed_score, actual_position, actual_price,
                hit_win, hit_place, factor_json
         FROM rrt_runner_factor_snapshots
         WHERE {where_sql}
@@ -203,22 +211,31 @@ def _group_by_race(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]
     return grouped
 
 
-def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, float], roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0) -> Dict[str, Any]:
-    scored = [{**row, "simulated_score": _score_runner_from_weights(row, weights)} for row in race_rows]
-    ranked = sorted(scored, key=lambda item: (_to_float(item.get("simulated_score")), -_to_float(item.get("market_price"), 9999)), reverse=True)
-    top_4_win = ranked[:4]
-    top_4_each_way = ranked[4:8] if len(ranked) >= 8 else ranked[:4]
-    excluded_keys = {item.get("runner_key") for item in top_4_win + top_4_each_way}
-    roughies = []
-    for item in ranked:
-        if item.get("runner_key") in excluded_keys:
-            continue
-        price = _to_float(item.get("market_price"))
-        market_rank = _to_int(item.get("market_rank"), 99)
-        score = _to_float(item.get("simulated_score"))
-        if price > 0 and price >= roughie_min_price and market_rank >= roughie_min_market_rank and score >= roughie_min_score:
-            roughies.append(item)
-    return {"top_4_win": top_4_win, "top_4_each_way": top_4_each_way, "top_4_roughies": roughies[:4]}
+def _category_scores(item: Dict[str, Any]) -> Dict[str, float]:
+    final=_to_float(item.get("simulated_score")); wp=_to_float(item.get("win_place_score"),50); last=_to_float(item.get("last10_score"),50)
+    speed=_to_float(item.get("speed_score"),50); market=_to_float(item.get("market_score"),50)
+    track=(_to_float(item.get("distance_record_score"),50)+_to_float(item.get("track_condition_score"),50))/2
+    price=_to_float(item.get("market_price")); value=75 if 7<=price<=20 else 65 if 20<price<=40 else 50 if price>40 else 35
+    return {"win_score":final,"each_way_score":round(final*.25+wp*.25+last*.18+speed*.12+track*.10+market*.10,2),
+            "roughie_score":round(final*.28+last*.18+speed*.16+wp*.14+_to_float(item.get("track_record_score"),50)*.09+value*.15,2)}
+
+
+def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, float], roughie_min_price: float=0.0, roughie_min_market_rank: int=0, roughie_min_score: float=0.0) -> Dict[str, Any]:
+    scored=[]
+    for row in race_rows:
+        item={**row,"simulated_score":_score_runner_from_weights(row,weights)}; item.update(_category_scores(item)); scored.append(item)
+    win_ranked=sorted(scored,key=lambda x:(_to_float(x.get("win_score")),-_to_float(x.get("market_price"),9999)),reverse=True)
+    top_win=win_ranked[:4]; win_keys={x.get("runner_key") for x in top_win}
+    ew_ranked=sorted(scored,key=lambda x:_to_float(x.get("each_way_score")),reverse=True)
+    each_way=[x for x in ew_ranked if x.get("runner_key") not in win_keys][:2]
+    for x in ew_ranked:
+        if len(each_way)>=4: break
+        if x.get("runner_key") in {y.get("runner_key") for y in each_way}: continue
+        if x.get("runner_key") in win_keys and sum(1 for y in each_way if y.get("runner_key") in win_keys)>=2: continue
+        each_way.append(x)
+    excluded={x.get("runner_key") for x in top_win+each_way}
+    roughies=[x for x in sorted(scored,key=lambda x:_to_float(x.get("roughie_score")),reverse=True) if x.get("runner_key") not in excluded][:4]
+    return {"top_4_win":top_win,"top_4_each_way":each_way,"top_4_roughies":roughies}
 
 
 def _selection_summary(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -243,15 +260,18 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
     race_results = []
     race_count = len(grouped)
     top_win_hits = 0
+    top1_win_hits = 0
     each_way_hits = 0
     each_way_total = 0
     roughie_hits = 0
     roughie_total = 0
     for race_key, race_rows in grouped.items():
         evaluated = _evaluate_race_rows(race_rows, weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
+        top1_hit = bool(evaluated["top_4_win"]) and evaluated["top_4_win"][0].get("actual_position") == 1
         win_hit = any(item.get("actual_position") == 1 for item in evaluated["top_4_win"])
         ew_hits = sum(1 for item in evaluated["top_4_each_way"] if item.get("actual_position") in [1,2,3])
         rough_hits = sum(1 for item in evaluated["top_4_roughies"] if item.get("actual_position") in [1,2,3,4])
+        top1_win_hits += 1 if top1_hit else 0
         top_win_hits += 1 if win_hit else 0
         each_way_hits += ew_hits
         each_way_total += len(evaluated["top_4_each_way"])
@@ -272,14 +292,15 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
             "top_4_each_way": [_selection_summary(i) for i in evaluated["top_4_each_way"]],
             "top_4_roughies": [_selection_summary(i) for i in evaluated["top_4_roughies"]],
         })
+    top1_rate = round((top1_win_hits / race_count) * 100, 2) if race_count else 0.0
     top_win_rate = round((top_win_hits / race_count) * 100, 2) if race_count else 0.0
     each_way_rate = round((each_way_hits / each_way_total) * 100, 2) if each_way_total else 0.0
     roughie_rate = round((roughie_hits / roughie_total) * 100, 2) if roughie_total else 0.0
     overall = round((top_win_rate * 0.45) + (each_way_rate * 0.35) + (roughie_rate * 0.20), 2)
     return {
         "race_count": race_count,
-        "selection_totals": {"top_win_total": race_count * 4, "top_win_hits": top_win_hits, "each_way_total": each_way_total, "each_way_hits": each_way_hits, "roughie_total": roughie_total, "roughie_hits": roughie_hits},
-        "metrics": {"top_win_strike_rate": top_win_rate, "each_way_strike_rate": each_way_rate, "roughie_strike_rate": roughie_rate, "overall_accuracy": overall},
+        "selection_totals": {"top1_win_total": race_count, "top1_win_hits": top1_win_hits, "top4_win_total": race_count, "top4_win_hits": top_win_hits, "each_way_total": each_way_total, "each_way_hits": each_way_hits, "roughie_total": roughie_total, "roughie_hits": roughie_hits},
+        "metrics": {"top1_win_strike_rate": top1_rate, "top4_winner_coverage_rate": top_win_rate, "each_way_strike_rate": each_way_rate, "roughie_strike_rate": roughie_rate, "overall_accuracy": overall},
         "race_results_preview": race_results[:25],
     }
 
@@ -469,7 +490,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
         simulated_result = _evaluate_grouped_races(grouped, proposed_weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
         cm = current_result.get("metrics") or {}
         sm = simulated_result.get("metrics") or {}
-        improvement = {k: round(_to_float(sm.get(k)) - _to_float(cm.get(k)), 2) for k in ["top_win_strike_rate", "each_way_strike_rate", "roughie_strike_rate", "overall_accuracy"]}
+        improvement = {k: round(_to_float(sm.get(k)) - _to_float(cm.get(k)), 2) for k in ["top1_win_strike_rate", "top4_winner_coverage_rate", "each_way_strike_rate", "roughie_strike_rate", "overall_accuracy"]}
         simulation_id = str(uuid.uuid4())
         response = {
             "success": True,
@@ -592,14 +613,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.19.4 calibrated native full-field suite",
+                notes="v2.19.5 distinct-selection and speed suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.19.4 calibrated native full-field suite",
+                simulation_group="v2.19.5 distinct-selection and speed suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -674,10 +695,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the v2.18.3 rollback baseline with the active v2.19.4 weights."""
+    """Compare the v2.18.3 rollback baseline with the active v2.19.5 weights."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.19.4 production calibration",
+        simulation_name="v2.19.5 production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -685,7 +706,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.19.4 production calibration",
+        simulation_group="v2.19.5 production calibration",
     )
 
 

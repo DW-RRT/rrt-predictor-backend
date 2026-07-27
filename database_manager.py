@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.19.4"
+SCHEMA_VERSION = "2.19.5"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -127,6 +127,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 barrier_score NUMERIC(6,2),
                 weight_score NUMERIC(6,2),
                 market_score NUMERIC(6,2),
+                speed_score NUMERIC(6,2),
                 weighted_last10 NUMERIC(8,4),
                 weighted_win_place NUMERIC(8,4),
                 weighted_track_record NUMERIC(8,4),
@@ -139,6 +140,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 weighted_barrier NUMERIC(8,4),
                 weighted_weight NUMERIC(8,4),
                 weighted_market NUMERIC(8,4),
+                weighted_speed NUMERIC(8,4),
                 actual_position INTEGER,
                 actual_price NUMERIC(10,2),
                 hit_win BOOLEAN,
@@ -149,6 +151,38 @@ def init_postgres_schema() -> Dict[str, Any]:
             );
             """
         )
+
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS speed_score NUMERIC(6,2);")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS weighted_speed NUMERIC(8,4);")
+
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_runner_speed_history (
+                id BIGSERIAL PRIMARY KEY,
+                meeting_id BIGINT NOT NULL, race_id BIGINT NOT NULL, race_number INTEGER,
+                meeting_date DATE, track TEXT, track_condition TEXT, race_class TEXT,
+                distance_m INTEGER, official_race_time_seconds NUMERIC(10,4),
+                runner_id BIGINT, runner_name TEXT, tab_number INTEGER, position INTEGER,
+                margin_lengths NUMERIC(10,3), estimated_runner_time_seconds NUMERIC(10,4),
+                average_speed_mps NUMERIC(10,5), normalised_speed_score NUMERIC(6,2),
+                source TEXT DEFAULT 'Punting Form Results', created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(meeting_id, race_id, runner_id, tab_number)
+            );
+            """
+        )
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_runner_speed_profiles (
+                runner_id BIGINT PRIMARY KEY, runner_name TEXT, completed_runs INTEGER NOT NULL DEFAULT 0,
+                latest_speed_score NUMERIC(6,2), avg_last3_speed_score NUMERIC(6,2),
+                avg_last5_speed_score NUMERIC(6,2), best_speed_score NUMERIC(6,2),
+                speed_consistency NUMERIC(6,2), latest_run_date DATE, updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+        execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_speed_history_runner ON rrt_runner_speed_history(runner_id, meeting_date DESC);")
+        execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_speed_history_cohort ON rrt_runner_speed_history(distance_m, track_condition, meeting_date);")
 
         execute_sql(
             """
@@ -289,7 +323,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
             UPDATE rrt_model_weight_sets
             SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.19.4';
+            WHERE status = 'Active' AND model_version <> '2.19.5';
             """
         )
         execute_sql(
@@ -298,8 +332,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
               ('2.18.3','Archive',%s::jsonb,'RRT Predictor','Verified pre-calibration baseline.',NULL,FALSE),
-              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.4 selection-logic operation.',NULL,FALSE),
-              ('2.19.4','Active',%s::jsonb,'RRT Predictor','v2.19.4 production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
+              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.5 selection and speed-rating operation.',NULL,FALSE),
+              ('2.19.5','Active',%s::jsonb,'RRT Predictor','v2.19.5 production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=CASE WHEN rrt_model_weight_sets.status='Active' THEN rrt_model_weight_sets.weights_json ELSE EXCLUDED.weights_json END,
@@ -308,9 +342,9 @@ def init_postgres_schema() -> Dict[str, Any]:
               activated_at=CASE WHEN EXCLUDED.status='Active' THEN COALESCE(rrt_model_weight_sets.activated_at,NOW()) ELSE rrt_model_weight_sets.activated_at END;
             """,
             (
-                json.dumps({"last10":15,"win_place":8,"track_record":8,"distance_record":9,"track_distance":9,"track_condition":12,"trainer":10,"jockey":8,"trainer_jockey":12,"barrier":4,"weight":2,"market":3}),
-                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14}),
-                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14}),
+                json.dumps({"last10":15,"win_place":8,"track_record":8,"distance_record":9,"track_distance":9,"track_condition":12,"trainer":10,"jockey":8,"trainer_jockey":12,"barrier":4,"weight":2,"market":3,"speed":0}),
+                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14,"speed":0}),
+                json.dumps({"last10":15,"win_place":9,"track_record":8,"distance_record":8,"track_distance":8,"track_condition":8,"trainer":7,"jockey":7,"trainer_jockey":9,"barrier":4,"weight":3,"market":14,"speed":0}),
             ),
         )
 
@@ -387,8 +421,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.19.4",
-                "RRT Predictor v2.19.4 best-double race combination and rank 5-8 roughie selection logic.",
+                "2.19.5",
+                "RRT Predictor v2.19.5 distinct Win/Each-Way/Roughie scoring and Normalised Speed Rating capture.",
                 True,
             ),
         )
@@ -412,6 +446,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_factor_recommendations",
                 "rrt_model_weight_sets",
                 "rrt_weight_promotion_audit",
+                "rrt_runner_speed_history",
+                "rrt_runner_speed_profiles",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -667,7 +703,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.19.4",
+    model_version: str = "2.19.5",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -1030,7 +1066,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     trainer_jockey_score,
                     barrier_score,
                     weight_score,
-                    market_score,
+                    market_score, speed_score,
                     weighted_last10,
                     weighted_win_place,
                     weighted_track_record,
@@ -1042,14 +1078,14 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     weighted_trainer_jockey,
                     weighted_barrier,
                     weighted_weight,
-                    weighted_market,
+                    weighted_market, weighted_speed,
                     factor_json
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
                 )
                 ON CONFLICT (meeting_id, model_version, runner_key)
                 DO UPDATE SET
@@ -1076,6 +1112,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     barrier_score = EXCLUDED.barrier_score,
                     weight_score = EXCLUDED.weight_score,
                     market_score = EXCLUDED.market_score,
+                    speed_score = EXCLUDED.speed_score,
                     weighted_last10 = EXCLUDED.weighted_last10,
                     weighted_win_place = EXCLUDED.weighted_win_place,
                     weighted_track_record = EXCLUDED.weighted_track_record,
@@ -1088,6 +1125,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     weighted_barrier = EXCLUDED.weighted_barrier,
                     weighted_weight = EXCLUDED.weighted_weight,
                     weighted_market = EXCLUDED.weighted_market,
+                    weighted_speed = EXCLUDED.weighted_speed,
                     factor_json = EXCLUDED.factor_json,
                     updated_at = NOW();
                 """,
@@ -1118,6 +1156,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     breakdown.get("barrier"),
                     breakdown.get("weight"),
                     breakdown.get("market_price"),
+                    breakdown.get("speed_rating"),
                     weighted.get("last10_form"),
                     weighted.get("win_place"),
                     weighted.get("track_record"),
@@ -1130,6 +1169,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     weighted.get("barrier"),
                     weighted.get("weight"),
                     weighted.get("market_price"),
+                    weighted.get("speed_rating"),
                     json.dumps(runner),
                 ),
             )
@@ -1273,6 +1313,129 @@ def update_runner_factor_results_from_results(
         }
 
 
+
+def _parse_official_time_seconds(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parts = text.split(":")
+        if len(parts) == 3:
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return float(parts[0]) * 60 + float(parts[1])
+        return float(text)
+    except Exception:
+        return None
+
+
+def _seconds_per_length(distance_m: Any) -> float:
+    distance = _safe_float_or_none(distance_m) or 1200.0
+    if distance <= 1000: return 0.145
+    if distance <= 1400: return 0.155
+    if distance <= 1800: return 0.165
+    if distance <= 2400: return 0.175
+    return 0.185
+
+
+def save_speed_ratings_from_results(results_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist race-time-derived runner speed figures. No sectional or in-run data is used."""
+    try:
+        meeting_id = results_snapshot.get("meeting_id")
+        meeting_date = results_snapshot.get("meeting_date")
+        track = results_snapshot.get("track")
+        saved = 0
+        runners_seen = set()
+        for race in results_snapshot.get("races") or []:
+            race_id = race.get("race_id")
+            distance = _safe_float_or_none(race.get("distance_m"))
+            official_seconds = _parse_official_time_seconds(race.get("official_race_time"))
+            if not meeting_id or not race_id or not distance or not official_seconds or official_seconds <= 0:
+                continue
+            spl = _seconds_per_length(distance)
+            # Race quality component compares the official pace with existing comparable races.
+            cohort = fetch_one("""
+                SELECT AVG(official_race_time_seconds) AS avg_time, STDDEV_POP(official_race_time_seconds) AS sd_time
+                FROM rrt_runner_speed_history
+                WHERE distance_m BETWEEN %s AND %s AND UPPER(COALESCE(track_condition,'')) = UPPER(%s)
+                  AND position = 1;
+            """, (int(distance)-100, int(distance)+100, race.get("track_condition") or "")) or {}
+            avg_time = _safe_float_or_none(cohort.get("avg_time"))
+            sd_time = _safe_float_or_none(cohort.get("sd_time"))
+            pace_quality = 50.0
+            if avg_time and sd_time and sd_time > 0.05:
+                pace_quality = max(20.0, min(80.0, 50.0 + ((avg_time - official_seconds) / sd_time) * 10.0))
+            for runner in race.get("runners") or []:
+                runner_id = runner.get("runner_id")
+                tab = runner.get("tab_number")
+                margin = _safe_float_or_none(runner.get("margin")) or 0.0
+                estimated = official_seconds + max(0.0, margin) * spl
+                speed_mps = distance / estimated if estimated > 0 else 0.0
+                relative = max(0.0, min(100.0, 100.0 - max(0.0, margin) * 3.0))
+                speed_score = round((relative * 0.70) + (pace_quality * 0.30), 2)
+                execute_sql("""
+                    INSERT INTO rrt_runner_speed_history(
+                        meeting_id,race_id,race_number,meeting_date,track,track_condition,race_class,distance_m,
+                        official_race_time_seconds,runner_id,runner_name,tab_number,position,margin_lengths,
+                        estimated_runner_time_seconds,average_speed_mps,normalised_speed_score
+                    ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT(meeting_id,race_id,runner_id,tab_number) DO UPDATE SET
+                        position=EXCLUDED.position,margin_lengths=EXCLUDED.margin_lengths,
+                        estimated_runner_time_seconds=EXCLUDED.estimated_runner_time_seconds,
+                        average_speed_mps=EXCLUDED.average_speed_mps,
+                        normalised_speed_score=EXCLUDED.normalised_speed_score,updated_at=NOW();
+                """, (meeting_id,race_id,race.get("race_number"),meeting_date,track,race.get("track_condition"),
+                      race.get("race_class"),int(distance),official_seconds,runner_id,runner.get("runner"),tab,
+                      runner.get("position"),margin,estimated,speed_mps,speed_score))
+                if runner_id:
+                    runners_seen.add(int(runner_id))
+                saved += 1
+        for runner_id in runners_seen:
+            rows = fetch_all("""SELECT runner_name,meeting_date,normalised_speed_score FROM rrt_runner_speed_history
+                WHERE runner_id=%s AND normalised_speed_score IS NOT NULL ORDER BY meeting_date DESC, id DESC LIMIT 20;""", (runner_id,))
+            scores = [float(r.get("normalised_speed_score")) for r in rows if r.get("normalised_speed_score") is not None]
+            if not scores: continue
+            avg3 = sum(scores[:3])/len(scores[:3]); avg5 = sum(scores[:5])/len(scores[:5])
+            consistency = max(0.0, 100.0 - ((sum((x-avg5)**2 for x in scores[:5])/len(scores[:5]))**0.5)*2.0)
+            execute_sql("""INSERT INTO rrt_runner_speed_profiles(runner_id,runner_name,completed_runs,latest_speed_score,
+                avg_last3_speed_score,avg_last5_speed_score,best_speed_score,speed_consistency,latest_run_date,updated_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) ON CONFLICT(runner_id) DO UPDATE SET
+                runner_name=EXCLUDED.runner_name,completed_runs=EXCLUDED.completed_runs,latest_speed_score=EXCLUDED.latest_speed_score,
+                avg_last3_speed_score=EXCLUDED.avg_last3_speed_score,avg_last5_speed_score=EXCLUDED.avg_last5_speed_score,
+                best_speed_score=EXCLUDED.best_speed_score,speed_consistency=EXCLUDED.speed_consistency,
+                latest_run_date=EXCLUDED.latest_run_date,updated_at=NOW();""",
+                (runner_id,rows[0].get("runner_name"),len(scores),scores[0],round(avg3,2),round(avg5,2),max(scores),round(consistency,2),rows[0].get("meeting_date")))
+        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.5","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
+    except Exception as error:
+        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.5","error":str(error)}
+
+
+def backfill_speed_ratings_from_saved_results(limit: int = 500) -> Dict[str, Any]:
+    rows = fetch_all("SELECT result_json FROM rrt_results_snapshots ORDER BY meeting_date ASC, id ASC LIMIT %s;", (max(1,min(limit,5000)),))
+    processed=0; saved=0; failures=[]
+    for row in rows:
+        payload=row.get("result_json") or {}
+        if isinstance(payload,str):
+            try: payload=json.loads(payload)
+            except Exception: payload={}
+        result=save_speed_ratings_from_results(payload)
+        if result.get("success"):
+            processed += 1; saved += int(result.get("saved_runner_times") or 0)
+        else: failures.append(result.get("error"))
+    return {"success":not failures,"speed_version":"2.19.5","result_snapshots_processed":processed,"runner_speed_rows_saved":saved,"failures":failures[:20],"in_run_used":False}
+
+
+def get_speed_rating_summary() -> Dict[str, Any]:
+    totals=fetch_one("""SELECT COUNT(*) AS history_rows,COUNT(DISTINCT runner_id) AS runner_count,
+        COUNT(DISTINCT meeting_id) AS meeting_count,COUNT(DISTINCT race_id) AS race_count,
+        ROUND(AVG(normalised_speed_score),2) AS avg_speed_score,MIN(meeting_date) AS first_date,MAX(meeting_date) AS latest_date
+        FROM rrt_runner_speed_history;""") or {}
+    profiles=fetch_one("SELECT COUNT(*) AS profile_count,COUNT(*) FILTER(WHERE completed_runs>=3) AS profiles_with_3_runs FROM rrt_runner_speed_profiles;") or {}
+    return {"success":True,"speed_version":"2.19.5","analysis_only":True,"totals":totals,"profiles":profiles,"in_run_used":False}
+
+
 def get_factor_capture_summary() -> Dict[str, Any]:
     try:
         totals = fetch_one(
@@ -1303,7 +1466,8 @@ def get_factor_capture_summary() -> Dict[str, Any]:
                 ROUND(AVG(trainer_jockey_score), 2) AS avg_trainer_jockey_score,
                 ROUND(AVG(barrier_score), 2) AS avg_barrier_score,
                 ROUND(AVG(weight_score), 2) AS avg_weight_score,
-                ROUND(AVG(market_score), 2) AS avg_market_score
+                ROUND(AVG(market_score), 2) AS avg_market_score,
+                ROUND(AVG(speed_score), 2) AS avg_speed_score
             FROM rrt_runner_factor_snapshots;
             """
         ) or {}
