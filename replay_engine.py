@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.19.5"
-MODEL_VERSION = "2.19.5"
+REPLAY_VERSION = "2.19.5a"
+MODEL_VERSION = "2.19.5a"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -117,7 +117,7 @@ def _race_key(row: Dict[str, Any]) -> Tuple[Any, Any]:
     return row.get("meeting_id"), row.get("race_id") or row.get("race_number")
 
 
-def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str, roughie_min_price: float, roughie_min_rank: int) -> Dict[str, Any]:
+def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str) -> Dict[str, Any]:
     races = 0
     top1_hits = top4_win_hits = top4_place_hits = roughie_hits = 0
     roughie_races = 0
@@ -133,11 +133,12 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         win_hit = winner is not None and winner.get("runner_key") in {r.get("runner_key") for r in top4}
         place_hit = any(1 <= int(_float(r.get("actual_position"), 999)) <= 3 for r in top4)
         top1_hits += int(top1_hit); top4_win_hits += int(win_hit); top4_place_hits += int(place_hit)
-        roughies = [r for r in ranked if _float(r.get("market_price")) >= roughie_min_price and int(_float(r.get("market_rank"), 0)) >= roughie_min_rank]
+        # Production-aligned roughies: ranks 5-8 outside the Top 4, with no thresholds.
+        roughies = ranked[4:8]
         roughie_hit = False
         if roughies:
             roughie_races += 1
-            roughie_hit = any(int(_float(r.get("actual_position"), 999)) == 1 for r in roughies[:4])
+            roughie_hit = any(int(_float(r.get("actual_position"), 999)) == 1 for r in roughies)
             roughie_hits += int(roughie_hit)
         selections.append({
             "meeting_id": key[0], "race_number": ranked[0].get("race_number"), "track": ranked[0].get("track"),
@@ -157,7 +158,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.19.5 production-versus-candidate replay",
+    replay_name: str = "v2.19.5a production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -177,8 +178,8 @@ def run_historical_replay(
             row["current_score"] = _score(row, current_weights)
             row["replay_score"] = _score(row, weights)
             groups.setdefault(_race_key(row), []).append(row)
-        current = _metrics(groups, "current_score", roughie_min_price, roughie_min_market_rank)
-        replay = _metrics(groups, "replay_score", roughie_min_price, roughie_min_market_rank)
+        current = _metrics(groups, "current_score")
+        replay = _metrics(groups, "replay_score")
         improvement = {
             key: round(_float(replay.get(key)) - _float(current.get(key)), 2)
             for key in ["top1_win_strike_rate", "top4_win_strike_rate", "top4_place_strike_rate", "roughie_win_strike_rate"]
@@ -192,7 +193,7 @@ def run_historical_replay(
             "dataset": {"runner_count": len(rows), "race_count": len(groups), "meeting_count": len({r.get('meeting_id') for r in rows}),
                         "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
             "production_weights": current_weights, "candidate_weights": weights,
-            "roughie_rules": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank},
+            "roughie_rules": {"method": "ranks_5_to_8_outside_top4", "thresholds_applied": False},
             "current_metrics": {k: v for k, v in current.items() if k != "selections"},
             "replay_metrics": {k: v for k, v in replay.items() if k != "selections"},
             "improvement": improvement,

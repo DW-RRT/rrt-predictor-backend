@@ -2,8 +2,8 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.15.0"
-MODEL_VERSION = "2.8.1"
+ANALYSIS_VERSION = "2.19.5a"
+MODEL_VERSION = "2.19.5a"
 
 FACTOR_COLUMNS = [
     {"key": "last10", "label": "Last 10 Form", "score_column": "last10_score", "weighted_column": "weighted_last10"},
@@ -18,6 +18,7 @@ FACTOR_COLUMNS = [
     {"key": "barrier", "label": "Barrier", "score_column": "barrier_score", "weighted_column": "weighted_barrier"},
     {"key": "weight", "label": "Weight Carried", "score_column": "weight_score", "weighted_column": "weighted_weight"},
     {"key": "market", "label": "Market", "score_column": "market_score", "weighted_column": "weighted_market"},
+    {"key": "speed", "label": "Normalised Speed Rating", "score_column": "speed_score", "weighted_column": "weighted_speed"},
 ]
 
 

@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.19.5"
+SCHEMA_VERSION = "2.19.5a"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -183,6 +183,23 @@ def init_postgres_schema() -> Dict[str, Any]:
         )
         execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_speed_history_runner ON rrt_runner_speed_history(runner_id, meeting_date DESC);")
         execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_speed_history_cohort ON rrt_runner_speed_history(distance_m, track_condition, meeting_date);")
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_speed_backfill_runs (
+                id BIGSERIAL PRIMARY KEY,
+                batch_id TEXT UNIQUE NOT NULL,
+                meeting_limit INTEGER NOT NULL,
+                meetings_selected INTEGER NOT NULL DEFAULT 0,
+                meetings_processed INTEGER NOT NULL DEFAULT 0,
+                runner_rows_saved INTEGER NOT NULL DEFAULT 0,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                started_at TIMESTAMPTZ DEFAULT NOW(),
+                completed_at TIMESTAMPTZ,
+                result_json JSONB NOT NULL DEFAULT '{}'::jsonb
+            );
+            """
+        )
 
         execute_sql(
             """
@@ -323,7 +340,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
             UPDATE rrt_model_weight_sets
             SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.19.5';
+            WHERE status = 'Active' AND model_version <> '2.19.5a';
             """
         )
         execute_sql(
@@ -332,8 +349,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
               ('2.18.3','Archive',%s::jsonb,'RRT Predictor','Verified pre-calibration baseline.',NULL,FALSE),
-              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.5 selection and speed-rating operation.',NULL,FALSE),
-              ('2.19.5','Active',%s::jsonb,'RRT Predictor','v2.19.5 production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
+              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.5a selection and speed-rating operation.',NULL,FALSE),
+              ('2.19.5a','Active',%s::jsonb,'RRT Predictor','v2.19.5a production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=CASE WHEN rrt_model_weight_sets.status='Active' THEN rrt_model_weight_sets.weights_json ELSE EXCLUDED.weights_json END,
@@ -421,8 +438,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.19.5",
-                "RRT Predictor v2.19.5 distinct Win/Each-Way/Roughie scoring and Normalised Speed Rating capture.",
+                "2.19.5a",
+                "RRT Predictor v2.19.5a distinct Win/Each-Way/Roughie scoring and Normalised Speed Rating capture.",
                 True,
             ),
         )
@@ -448,6 +465,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_weight_promotion_audit",
                 "rrt_runner_speed_history",
                 "rrt_runner_speed_profiles",
+                "rrt_speed_backfill_runs",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -703,7 +721,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.19.5",
+    model_version: str = "2.19.5a",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -1407,33 +1425,118 @@ def save_speed_ratings_from_results(results_snapshot: Dict[str, Any]) -> Dict[st
                 best_speed_score=EXCLUDED.best_speed_score,speed_consistency=EXCLUDED.speed_consistency,
                 latest_run_date=EXCLUDED.latest_run_date,updated_at=NOW();""",
                 (runner_id,rows[0].get("runner_name"),len(scores),scores[0],round(avg3,2),round(avg5,2),max(scores),round(consistency,2),rows[0].get("meeting_date")))
-        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.5","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
+        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.5a","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
     except Exception as error:
-        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.5","error":str(error)}
+        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.5a","error":str(error)}
 
 
-def backfill_speed_ratings_from_saved_results(limit: int = 500) -> Dict[str, Any]:
-    rows = fetch_all("SELECT result_json FROM rrt_results_snapshots ORDER BY meeting_date ASC, id ASC LIMIT %s;", (max(1,min(limit,5000)),))
-    processed=0; saved=0; failures=[]
+def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
+    """Process one bounded, resumable batch of unprocessed result meetings.
+
+    ``limit`` is a meeting limit, not a runner-row limit. Completed meetings are
+    excluded by the presence of speed-history rows, so a later call resumes from
+    the next eligible meeting after a restart.
+    """
+    from datetime import datetime, timezone
+    import uuid
+
+    meeting_limit = max(1, min(int(limit or 5), 25))
+    batch_id = f"speed-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    started = datetime.now(timezone.utc)
+    rows = fetch_all(
+        """
+        SELECT rs.id, rs.meeting_id, rs.meeting_date, rs.result_json
+        FROM rrt_results_snapshots rs
+        WHERE NOT EXISTS (
+            SELECT 1 FROM rrt_runner_speed_history sh
+            WHERE sh.meeting_id = rs.meeting_id
+        )
+        ORDER BY rs.meeting_date ASC NULLS LAST, rs.id ASC
+        LIMIT %s;
+        """,
+        (meeting_limit,),
+    )
+
+    processed = 0
+    saved = 0
+    failures: List[Dict[str, Any]] = []
     for row in rows:
-        payload=row.get("result_json") or {}
-        if isinstance(payload,str):
-            try: payload=json.loads(payload)
-            except Exception: payload={}
-        result=save_speed_ratings_from_results(payload)
+        payload = row.get("result_json") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception as error:
+                failures.append({"meeting_id": row.get("meeting_id"), "error": f"Invalid result JSON: {error}"})
+                continue
+        # Preserve the snapshot identity where older JSON omitted it.
+        if isinstance(payload, dict):
+            payload.setdefault("meeting_id", row.get("meeting_id"))
+            payload.setdefault("meeting_date", row.get("meeting_date"))
+        result = save_speed_ratings_from_results(payload)
         if result.get("success"):
-            processed += 1; saved += int(result.get("saved_runner_times") or 0)
-        else: failures.append(result.get("error"))
-    return {"success":not failures,"speed_version":"2.19.5","result_snapshots_processed":processed,"runner_speed_rows_saved":saved,"failures":failures[:20],"in_run_used":False}
+            processed += 1
+            saved += int(result.get("saved_runner_times") or 0)
+        else:
+            failures.append({"meeting_id": row.get("meeting_id"), "error": result.get("error") or "Unknown failure"})
+        # Release the potentially large JSON graph before the next meeting.
+        payload = None
+        result = None
 
+    remaining_row = fetch_one(
+        """
+        SELECT COUNT(*) AS count
+        FROM rrt_results_snapshots rs
+        WHERE NOT EXISTS (
+            SELECT 1 FROM rrt_runner_speed_history sh
+            WHERE sh.meeting_id = rs.meeting_id
+        );
+        """
+    ) or {}
+    remaining = int(remaining_row.get("count") or 0)
+    elapsed = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
+    status = "completed" if not failures else "completed_with_failures"
+    response = {
+        "success": not failures,
+        "provider": "PostgreSQL",
+        "speed_version": "2.19.5a",
+        "batch_id": batch_id,
+        "status": status,
+        "meeting_limit": meeting_limit,
+        "meetings_selected": len(rows),
+        "meetings_processed": processed,
+        "runner_speed_rows_saved": saved,
+        "remaining_meetings": remaining,
+        "backfill_complete": remaining == 0,
+        "elapsed_seconds": elapsed,
+        "failures": failures[:20],
+        "resumable": True,
+        "in_run_used": False,
+    }
+    execute_sql(
+        """
+        INSERT INTO rrt_speed_backfill_runs(
+            batch_id, meeting_limit, meetings_selected, meetings_processed,
+            runner_rows_saved, failure_count, status, completed_at, result_json
+        ) VALUES(%s,%s,%s,%s,%s,%s,%s,NOW(),%s::jsonb);
+        """,
+        (batch_id, meeting_limit, len(rows), processed, saved, len(failures), status, json.dumps(response, default=str)),
+    )
+    return response
 
 def get_speed_rating_summary() -> Dict[str, Any]:
-    totals=fetch_one("""SELECT COUNT(*) AS history_rows,COUNT(DISTINCT runner_id) AS runner_count,
+    totals = fetch_one("""SELECT COUNT(*) AS history_rows,COUNT(DISTINCT runner_id) AS runner_count,
         COUNT(DISTINCT meeting_id) AS meeting_count,COUNT(DISTINCT race_id) AS race_count,
         ROUND(AVG(normalised_speed_score),2) AS avg_speed_score,MIN(meeting_date) AS first_date,MAX(meeting_date) AS latest_date
         FROM rrt_runner_speed_history;""") or {}
-    profiles=fetch_one("SELECT COUNT(*) AS profile_count,COUNT(*) FILTER(WHERE completed_runs>=3) AS profiles_with_3_runs FROM rrt_runner_speed_profiles;") or {}
-    return {"success":True,"speed_version":"2.19.5","analysis_only":True,"totals":totals,"profiles":profiles,"in_run_used":False}
+    profiles = fetch_one("SELECT COUNT(*) AS profile_count,COUNT(*) FILTER(WHERE completed_runs>=3) AS profiles_with_3_runs FROM rrt_runner_speed_profiles;") or {}
+    pending = fetch_one("""SELECT COUNT(*) AS count FROM rrt_results_snapshots rs WHERE NOT EXISTS
+        (SELECT 1 FROM rrt_runner_speed_history sh WHERE sh.meeting_id=rs.meeting_id);""") or {}
+    latest_batch = fetch_one("""SELECT batch_id,meeting_limit,meetings_selected,meetings_processed,runner_rows_saved,
+        failure_count,status,started_at,completed_at FROM rrt_speed_backfill_runs ORDER BY id DESC LIMIT 1;""") or {}
+    remaining = int(pending.get("count") or 0)
+    return {"success":True,"speed_version":"2.19.5a","analysis_only":True,"totals":totals,"profiles":profiles,
+            "backfill":{"remaining_meetings":remaining,"complete":remaining==0,"latest_batch":latest_batch},
+            "resumable":True,"in_run_used":False}
 
 
 def get_factor_capture_summary() -> Dict[str, Any]:

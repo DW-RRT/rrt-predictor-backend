@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.19.5"
-MODEL_VERSION = "2.19.5"
+SIMULATOR_VERSION = "2.19.5a"
+MODEL_VERSION = "2.19.5a"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -180,7 +180,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -233,8 +233,9 @@ def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, floa
         if x.get("runner_key") in {y.get("runner_key") for y in each_way}: continue
         if x.get("runner_key") in win_keys and sum(1 for y in each_way if y.get("runner_key") in win_keys)>=2: continue
         each_way.append(x)
-    excluded={x.get("runner_key") for x in top_win+each_way}
-    roughies=[x for x in sorted(scored,key=lambda x:_to_float(x.get("roughie_score")),reverse=True) if x.get("runner_key") not in excluded][:4]
+    # Production-aligned roughies: meeting/race ranks 5-8 outside the Top 4.
+    # No price, market-rank or score threshold is applied.
+    roughies = win_ranked[4:8]
     return {"top_4_win":top_win,"top_4_each_way":each_way,"top_4_roughies":roughies}
 
 
@@ -475,19 +476,21 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.15.0 default simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.19.5a analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
     new_weight: Optional[float] = None,
-    change_amount: Optional[float] = None) -> Dict[str, Any]:
+    change_amount: Optional[float] = None,
+    _preloaded_rows: Optional[List[Dict[str, Any]]] = None,
+    _preloaded_grouped: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
     try:
-        rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
-        grouped = _group_by_race(rows)
+        rows = _preloaded_rows if _preloaded_rows is not None else _load_completed_runner_rows(min_meeting_date, max_meeting_date)
+        grouped = _preloaded_grouped if _preloaded_grouped is not None else _group_by_race(rows)
         current_weights = _normalise_weights(_active_weights())
         proposed_weights = _normalise_weights(test_weights or CURRENT_MODEL_WEIGHTS)
-        current_result = _evaluate_grouped_races(grouped, current_weights, 10.0, 6, 45.0)
-        simulated_result = _evaluate_grouped_races(grouped, proposed_weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
+        current_result = _evaluate_grouped_races(grouped, current_weights, 0.0, 0, 0.0)
+        simulated_result = _evaluate_grouped_races(grouped, proposed_weights, 0.0, 0, 0.0)
         cm = current_result.get("metrics") or {}
         sm = simulated_result.get("metrics") or {}
         improvement = {k: round(_to_float(sm.get(k)) - _to_float(cm.get(k)), 2) for k in ["top1_win_strike_rate", "top4_winner_coverage_rate", "each_way_strike_rate", "roughie_strike_rate", "overall_accuracy"]}
@@ -512,7 +515,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "analysis_only": True,
             "prediction_model_changed": False,
             "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
-            "roughie_rules": {"current_baseline": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}, "simulated": {"min_price": roughie_min_price, "min_market_rank": roughie_min_market_rank, "min_score": roughie_min_score}},
+            "roughie_rules": {"method": "ranks_5_to_8_outside_top4", "thresholds_applied": False},
             "current_weights": current_weights,
             "test_weights": proposed_weights,
             "current_model": current_result,
@@ -600,6 +603,8 @@ def run_default_simulation_suite(
     """Run one-factor-at-a-time simulations and save each result."""
     try:
         results: List[Dict[str, Any]] = []
+        rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
+        grouped = _group_by_race(rows)
 
         for test in DEFAULT_SINGLE_FACTOR_SUITE:
             factor = test.get("factor")
@@ -613,18 +618,20 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.19.5 distinct-selection and speed suite",
+                notes="v2.19.5a distinct-selection and speed suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.19.5 distinct-selection and speed suite",
+                simulation_group="v2.19.5a distinct-selection and speed suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
                 change_amount=round(new_weight - old_weight, 2),
+                _preloaded_rows=rows,
+                _preloaded_grouped=grouped,
             )
 
             results.append(
@@ -670,6 +677,9 @@ def run_default_simulation_suite(
             "analysis_only": True,
             "prediction_model_changed": False,
             "simulation_count": len(results),
+            "memory_bounded": True,
+            "dataset_loaded_once": True,
+            "roughie_selection_method": "ranks_5_to_8_outside_top4",
             "summary": {
                 "improved": len(improved),
                 "neutral": len(neutral),
@@ -695,10 +705,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the v2.18.3 rollback baseline with the active v2.19.5 weights."""
+    """Compare the v2.18.3 rollback baseline with the active v2.19.5a weights."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.19.5 production calibration",
+        simulation_name="v2.19.5a production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -706,7 +716,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.19.5 production calibration",
+        simulation_group="v2.19.5a production calibration",
     )
 
 

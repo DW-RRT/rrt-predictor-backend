@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.5"
-PREDICTION_TYPE = "RRT Predictor v2.19.5 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
+MODEL_VERSION = "2.19.5a"
+PREDICTION_TYPE = "RRT Predictor v2.19.5a - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -37,7 +37,7 @@ SCORING_WEIGHTS = {
     "speed_rating": 0.00,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5a"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -1463,7 +1463,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.5",
+                "version": "2.19.5a",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1553,7 +1553,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.19.5",
+            "version": "2.19.5a",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
