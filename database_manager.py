@@ -380,7 +380,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             VALUES
               ('2.18.4','Archive',%s::jsonb,'RRT Predictor','Earlier calibrated production baseline.',NULL,FALSE),
               ('2.19.5b','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.6 Speed activation.',NULL,FALSE),
-              ('2.19.6','Active',%s::jsonb,'RRT Predictor','Normalised Speed active at 10%; all factor weights rebalanced to 100%. Automatic promotion remains disabled.',NOW(),FALSE)
+              ('2.19.6','Active',%s::jsonb,'RRT Predictor','Normalised Speed active at 10%%; all factor weights rebalanced to 100%%. Automatic promotion remains disabled.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=EXCLUDED.weights_json,

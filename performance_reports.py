@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from html import escape
 from io import BytesIO
+import re
 
 from database import fetch_all, fetch_one
 
@@ -1246,18 +1247,27 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
     speed_factor = next((row for row in (factor_effectiveness.get("factors") or []) if str(row.get("factor") or "").strip().lower() == "speed"), {})
     speed_simulations = []
     for row in best_simulations.get("simulations") or []:
-        if str(row.get("factor_tested") or "").strip().lower() != "speed":
+        simulation_name = str(row.get("simulation_name") or "")
+        factor_tested = str(row.get("factor_tested") or "").strip().lower()
+        if factor_tested != "speed" and "speed" not in simulation_name.lower():
             continue
+
+        new_weight = row.get("new_weight")
+        if new_weight is None:
+            match = re.search(r"speed(?: rating)?\s*\+?(\d+(?:\.\d+)?)", simulation_name, re.IGNORECASE)
+            if match:
+                new_weight = _to_float(match.group(1))
+
         improvement = row.get("improvement_json") or {}
         recommendation = row.get("recommendation_json") or {}
         speed_simulations.append({
             "simulation_name": row.get("simulation_name"),
-            "new_weight": row.get("new_weight"),
+            "new_weight": new_weight,
             "overall_improvement": improvement.get("overall_accuracy") if improvement.get("overall_accuracy") is not None else row.get("overall_improvement"),
             "top_win_improvement": improvement.get("top_win_strike_rate") if improvement.get("top_win_strike_rate") is not None else row.get("top_win_improvement"),
             "each_way_improvement": improvement.get("each_way_strike_rate") if improvement.get("each_way_strike_rate") is not None else row.get("each_way_improvement"),
             "roughie_improvement": improvement.get("roughie_strike_rate") if improvement.get("roughie_strike_rate") is not None else row.get("roughie_improvement"),
-            "status": recommendation.get("status"),
+            "status": recommendation.get("status") or row.get("status"),
         })
     speed_simulations.sort(key=lambda row: _to_float(row.get("overall_improvement"), -999.0), reverse=True)
     leading = speed_simulations[0] if speed_simulations else {}
@@ -1351,9 +1361,9 @@ def generate_learning_report_html() -> str:
         '<h2>Evidence-Based Factor Analysis</h2>',
         '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active v2.19.6 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
-        _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:12]]),
+        _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:13]]),
         '<h3>Future Adaptive Weight Proposals</h3>',
-        _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:12]]),
+        _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:13]]),
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
         '<h2>Historical Weight Simulation</h2>',
@@ -1465,9 +1475,9 @@ def generate_learning_report_pdf_bytes() -> bytes:
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}
     story.append(Paragraph("Factor Effectiveness Ranking", styles["RRTHeading"]))
-    story.append(t(["Rank","Factor","Win Gap","Place Gap","Win Corr","Place Corr","Signal","Conf"], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence')] for i in (factor_effectiveness.get('factors') or [])[:12]]))
+    story.append(t(["Rank","Factor","Win Gap","Place Gap","Win Corr","Place Corr","Signal","Conf"], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence')] for i in (factor_effectiveness.get('factors') or [])[:13]]))
     story.append(Paragraph("Future Adaptive Weight Proposals", styles["RRTHeading"]))
-    story.append(t(["Factor","Current","Rec.","Change","Direction","Priority"], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority')] for i in (weight_recommendations.get('recommendations') or [])[:12]]))
+    story.append(t(["Factor","Current","Rec.","Change","Direction","Priority"], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority')] for i in (weight_recommendations.get('recommendations') or [])[:13]]))
     health_readiness = model_health.get("readiness") or {}
     story.append(Paragraph("Model Health", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Readiness Score", health_readiness.get('score')],["Dataset Maturity", health_readiness.get('maturity')],["Best Factor", (model_health.get('best_factor') or {}).get('label')],["Weakest Factor", (model_health.get('weakest_factor') or {}).get('label')],["Next Action", model_health.get('recommended_next_action')]], [5*cm,11*cm]))
