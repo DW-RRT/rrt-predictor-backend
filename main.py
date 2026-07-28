@@ -1249,10 +1249,9 @@ def api_speed_rating_summary():
 
 
 @app.get("/api/speed-rating/backfill")
-@app.post("/api/speed-rating/backfill")
 async def api_speed_rating_backfill(
-    meeting_limit: int = Query(5, ge=1, le=25),
-    limit: Optional[int] = Query(None, ge=1, le=25),
+    meeting_limit: int = Query(5, ge=1, le=10),
+    limit: Optional[int] = Query(None, ge=1, le=10),
 ):
     # ``limit`` is retained as a compatibility alias. Both values represent meetings.
     batch_size = limit if limit is not None else meeting_limit
@@ -1384,7 +1383,7 @@ def api_model_weights():
     rollback = fetch_one("SELECT model_version,weights_json,source,notes,activated_at FROM rrt_model_weight_sets WHERE status='Rollback' ORDER BY created_at DESC LIMIT 1;") or {}
     active_weights = active.get("weights_json") or {}
     rollback_weights = rollback.get("weights_json") or {}
-    return {"success":True,"model_version":"2.19.5a","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":os.getenv("RRT_AUTO_WEIGHT_PROMOTION_ENABLED","true").lower()=="true","last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
+    return {"success":True,"model_version":"2.19.5a","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":False,"last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
 
 @app.get("/api/model/promotion-audit")
 def api_model_promotion_audit(limit: int = Query(20)):
