@@ -18,26 +18,26 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.5b"
-PREDICTION_TYPE = "RRT Predictor v2.19.5b - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
+MODEL_VERSION = "2.19.6"
+PREDICTION_TYPE = "RRT Predictor v2.19.6 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
 
 SCORING_WEIGHTS = {
-    "recent_form_last10": 0.15,
-    "win_place": 0.09,
-    "track_record": 0.08,
-    "distance_record": 0.08,
-    "track_distance_record": 0.08,
-    "track_condition_record": 0.08,
-    "trainer_a2e": 0.07,
-    "jockey_a2e": 0.07,
-    "trainer_jockey_a2e_combo": 0.09,
+    "recent_form_last10": 0.14,
+    "win_place": 0.08,
+    "track_record": 0.07,
+    "distance_record": 0.07,
+    "track_distance_record": 0.07,
+    "track_condition_record": 0.07,
+    "trainer_a2e": 0.06,
+    "jockey_a2e": 0.06,
+    "trainer_jockey_a2e_combo": 0.08,
     "barrier": 0.04,
-    "weight_carried": 0.03,
+    "weight_carried": 0.02,
     "market_price": 0.14,
-    "speed_rating": 0.00,
+    "speed_rating": 0.10,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5b"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.6"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -1526,7 +1526,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.5b",
+                "version": "2.19.6",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1616,7 +1616,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.19.5b",
+            "version": "2.19.6",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
@@ -1646,6 +1646,9 @@ def predict_meeting_from_punting_form(
     race_number: int = 0,
     runs: int = 10,
 ) -> Dict[str, Any]:
+    # Load the active production weight set before scoring this meeting.
+    refresh_active_scoring_weights()
+
     raw_response = get_meeting_form(
         meeting_id=meeting_id,
         race_number=race_number,

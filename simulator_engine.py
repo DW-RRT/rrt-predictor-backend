@@ -5,11 +5,27 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.19.5b"
-MODEL_VERSION = "2.19.5b"
+SIMULATOR_VERSION = "2.19.6"
+MODEL_VERSION = "2.19.6"
 
 
 CURRENT_MODEL_WEIGHTS = {
+    "last10": 14.0,
+    "win_place": 8.0,
+    "track_record": 7.0,
+    "distance_record": 7.0,
+    "track_distance": 7.0,
+    "track_condition": 7.0,
+    "trainer": 6.0,
+    "jockey": 6.0,
+    "trainer_jockey": 8.0,
+    "barrier": 4.0,
+    "weight": 2.0,
+    "market": 14.0,
+    "speed": 10.0,
+}
+
+ROLLBACK_MODEL_WEIGHTS = {
     "last10": 15.0,
     "win_place": 9.0,
     "track_record": 8.0,
@@ -25,38 +41,22 @@ CURRENT_MODEL_WEIGHTS = {
     "speed": 0.0,
 }
 
-ROLLBACK_MODEL_WEIGHTS = {
-    "last10": 15.0,
-    "win_place": 8.0,
-    "track_record": 8.0,
-    "distance_record": 9.0,
-    "track_distance": 9.0,
-    "track_condition": 12.0,
-    "trainer": 10.0,
-    "jockey": 8.0,
-    "trainer_jockey": 12.0,
-    "barrier": 4.0,
-    "weight": 2.0,
-    "market": 3.0,
-    "speed": 0.0,
-}
-
 
 
 DEFAULT_TEST_WEIGHTS = {
-    "last10": 15.0,
-    "win_place": 9.0,
+    "last10": 14.0,
+    "win_place": 8.0,
     "track_record": 7.0,
     "distance_record": 7.0,
     "track_distance": 7.0,
     "track_condition": 7.0,
     "trainer": 6.0,
-    "jockey": 7.0,
-    "trainer_jockey": 9.0,
+    "jockey": 6.0,
+    "trainer_jockey": 8.0,
     "barrier": 4.0,
-    "weight": 5.0,
+    "weight": 2.0,
     "market": 14.0,
-    "speed": 0.0,
+    "speed": 10.0,
 }
 
 
@@ -179,7 +179,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -475,7 +475,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.19.5b analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.19.6 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
@@ -617,14 +617,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.19.5b distinct-selection and speed suite",
+                notes="v2.19.6 distinct-selection and speed suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.19.5b distinct-selection and speed suite",
+                simulation_group="v2.19.6 distinct-selection and speed suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -704,10 +704,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the v2.18.3 rollback baseline with the active v2.19.5b weights."""
+    """Compare the v2.19.5b rollback baseline with the active v2.19.6 weights."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.19.5b production calibration",
+        simulation_name="v2.19.6 production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -715,7 +715,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.19.5b production calibration",
+        simulation_group="v2.19.6 production calibration",
     )
 
 
