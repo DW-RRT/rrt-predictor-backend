@@ -8,9 +8,9 @@ from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import run_weight_simulation
 from selection_intelligence import run_selection_intelligence_analysis
 
-LEARNING_VERSION = "2.19.5a"
-MODEL_VERSION = "2.19.5a"
-AUTO_PROMOTION_ENABLED = False  # v2.19.5a corrective release: analysis-only, no production promotion
+LEARNING_VERSION = "2.19.5b"
+MODEL_VERSION = "2.19.5b"
+AUTO_PROMOTION_ENABLED = False  # v2.19.5b corrective release: analysis-only, no production promotion
 MIN_NATIVE_RACES = int(os.getenv("RRT_PROMOTION_MIN_NATIVE_RACES", "150"))
 MIN_COMPLETED_RUNNERS = int(os.getenv("RRT_PROMOTION_MIN_COMPLETED_RUNNERS", "1200"))
 MIN_OVERALL_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_OVERALL_IMPROVEMENT", "1.0"))
@@ -50,7 +50,7 @@ def _candidate(weight_report: Dict[str,Any])->Dict[str,float]:
 def _dataset()->Dict[str,Any]:
     row=fetch_one("""SELECT COUNT(*) AS runner_rows, COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS completed_runner_rows,
         COUNT(DISTINCT meeting_id) AS meeting_count,
-        COUNT(DISTINCT (meeting_id::text||'|'||COALESCE(race_number::text,''))) FILTER (WHERE actual_position IS NOT NULL AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a')) AS native_completed_races,
+        COUNT(DISTINCT (meeting_id::text||'|'||COALESCE(race_number::text,''))) FILTER (WHERE actual_position IS NOT NULL AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b')) AS native_completed_races,
         MIN(meeting_date) AS first_meeting_date, MAX(meeting_date) AS latest_meeting_date FROM rrt_runner_factor_snapshots;""") or {}
     return {"source":"historical_factor_analysis_plus_native_capture","runner_rows":_i(row.get("runner_rows")),"completed_runner_rows":_i(row.get("completed_runner_rows")),"meeting_count":_i(row.get("meeting_count")),"native_completed_races":_i(row.get("native_completed_races")),"first_meeting_date":row.get("first_meeting_date"),"latest_meeting_date":row.get("latest_meeting_date"),"historical_learning_retained":True,"native_full_field_capture_active":True}
 
@@ -76,24 +76,29 @@ def _gate(dataset:Dict[str,Any], simulation:Dict[str,Any])->Dict[str,Any]:
 
 def _promote(cycle_id:str, current:Dict[str,Any], proposed:Dict[str,float], gate:Dict[str,Any])->Dict[str,Any]:
     promotion_id=f"promote-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    new_id=f"2.19.5a-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    new_id=f"2.19.5b-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     execute_sql("UPDATE rrt_model_weight_sets SET status='Rollback' WHERE status='Active';")
     execute_sql("""INSERT INTO rrt_model_weight_sets(model_version,status,weights_json,source,notes,activated_at,promoted_by_cycle_id,promotion_evidence_json,automatic_promotion)
-       VALUES(%s,'Active',%s::jsonb,'Adaptive Learning','Automatically promoted after all v2.19.5a safety gates passed.',NOW(),%s,%s::jsonb,TRUE);""",
+       VALUES(%s,'Active',%s::jsonb,'Adaptive Learning','Automatically promoted after all v2.19.5b safety gates passed.',NOW(),%s,%s::jsonb,TRUE);""",
        (new_id,json.dumps(proposed),cycle_id,json.dumps(gate,default=str)))
     execute_sql("""INSERT INTO rrt_weight_promotion_audit(promotion_id,cycle_id,from_weight_set,to_weight_set,decision,gate_json,previous_weights_json,proposed_weights_json,applied)
        VALUES(%s,%s,%s,%s,'Promoted',%s::jsonb,%s::jsonb,%s::jsonb,TRUE);""",
        (promotion_id,cycle_id,current.get("model_version"),new_id,json.dumps(gate,default=str),json.dumps(current.get("weights_json") or {}),json.dumps(proposed)))
     return {"applied":True,"promotion_id":promotion_id,"from_weight_set":current.get("model_version"),"to_weight_set":new_id,"weights":proposed}
 
-def run_adaptive_learning_cycle(cycle_name:str="v2.19.5a autonomous adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
+def run_adaptive_learning_cycle(cycle_name:str="v2.19.5b autonomous adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
     try:
       factors=get_factor_effectiveness_report(); weights=get_weight_recommendations(); dataset=_dataset()
+      if isinstance(weights, dict):
+        weights["recommendation_version"] = "2.19.5b"
+        weights["analysis_only"] = True
+        weights["prediction_model_changed"] = False
+        weights["safety_note"] = "v2.19.5b recommendations are analysis-only; automatic promotion is disabled and Speed remains at weight 0."
       if not factors.get("success") or not weights.get("success"):
         return {"success":False,"learning_version":LEARNING_VERSION,"factor_report":factors,"weight_report":weights}
       selection=run_selection_intelligence_analysis(save_result=True)
       proposed=_candidate(weights)
-      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.19.5a adaptive promotion candidate",notes="Automatic promotion-gate validation.",save_result=True,simulation_group="v2.19.5a promotion gate")
+      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.19.5b adaptive promotion candidate",notes="Automatic promotion-gate validation.",save_result=True,simulation_group="v2.19.5b promotion gate")
       gate=_gate(dataset,sim)
       cycle_id=f"learn-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
       current=_active_weight_row(); promotion={"applied":False,"reason":"Promotion gate not authorised."}
@@ -105,7 +110,7 @@ def run_adaptive_learning_cycle(cycle_name:str="v2.19.5a autonomous adaptive lea
           VALUES(%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,FALSE);""",
           (promotion_id,cycle_id,current.get("model_version"),"candidate-held",gate.get("decision") or "Monitor",json.dumps(gate,default=str),json.dumps(current.get("weights_json") or {}),json.dumps(proposed)))
         promotion={"applied":False,"promotion_id":promotion_id,"reason":"Candidate held; promotion safeguards not satisfied."}
-      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":not bool(promotion.get("applied")),"weights_changed_by_this_cycle":bool(promotion.get("applied")),"production_weights_active":True,"automatic_weight_changes_enabled":AUTO_PROMOTION_ENABLED,"historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":gate,"promotion":promotion,"safety_note":"v2.19.5a is analysis-only. Automatic production weight promotion is disabled; the active calibrated weights remain unchanged."}
+      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":not bool(promotion.get("applied")),"weights_changed_by_this_cycle":bool(promotion.get("applied")),"production_weights_active":True,"automatic_weight_changes_enabled":AUTO_PROMOTION_ENABLED,"historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":gate,"promotion":promotion,"safety_note":"v2.19.5b is analysis-only. Automatic production weight promotion is disabled; the active calibrated weights remain unchanged."}
       if save_result:
         execute_sql("""INSERT INTO rrt_learning_cycles(cycle_id,cycle_name,learning_version,model_version,dataset_json,factor_report_json,weight_report_json,simulation_report_json,selection_report_json,recommendations_json,cycle_json)
           VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",

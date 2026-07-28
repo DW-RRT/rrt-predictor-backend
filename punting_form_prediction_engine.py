@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.5a"
-PREDICTION_TYPE = "RRT Predictor v2.19.5a - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
+MODEL_VERSION = "2.19.5b"
+PREDICTION_TYPE = "RRT Predictor v2.19.5b - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.15,
@@ -37,7 +37,7 @@ SCORING_WEIGHTS = {
     "speed_rating": 0.00,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5a"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.5b"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -336,25 +336,82 @@ def _runner_factor_key(
 
 
 
-def get_normalised_speed_rating(runner_id: Any) -> Dict[str, Any]:
-    """Return a pre-race rolling speed profile derived only from prior official results."""
+def get_normalised_speed_rating(runner_id: Any, meeting_date: Any = None, runner_name: Any = None) -> Dict[str, Any]:
+    """Return a leakage-safe rolling speed score from official prior results only."""
     rid = safe_int(runner_id, 0)
-    if rid <= 0:
-        return {"score":50.0,"completed_runs":0,"source":"neutral_no_history"}
+    cutoff = normalise_date(meeting_date)
+    name = str(runner_name or "").strip()
+    if not cutoff:
+        return {"score": 50.0, "completed_runs": 0, "source": "neutral_missing_meeting_date"}
+    if rid <= 0 and not name:
+        return {"score": 50.0, "completed_runs": 0, "source": "neutral_no_identity"}
     try:
-        row = fetch_one("""SELECT completed_runs,latest_speed_score,avg_last3_speed_score,avg_last5_speed_score,
-            best_speed_score,speed_consistency,latest_run_date FROM rrt_runner_speed_profiles WHERE runner_id=%s;""", (rid,)) or {}
-        runs=safe_int(row.get("completed_runs"),0)
+        if rid > 0:
+            rows = fetch_one(
+                """
+                WITH prior AS (
+                    SELECT normalised_speed_score, meeting_date,
+                           ROW_NUMBER() OVER (ORDER BY meeting_date DESC, id DESC) AS rn
+                    FROM rrt_runner_speed_history
+                    WHERE runner_id = %s
+                      AND meeting_date < %s
+                      AND normalised_speed_score IS NOT NULL
+                    ORDER BY meeting_date DESC, id DESC
+                    LIMIT 5
+                )
+                SELECT COUNT(*) AS completed_runs,
+                       AVG(normalised_speed_score) FILTER (WHERE rn <= 3) AS avg_last3,
+                       AVG(normalised_speed_score) AS avg_last5,
+                       MAX(normalised_speed_score) AS best_score,
+                       GREATEST(0, LEAST(100, 100 - COALESCE(STDDEV_POP(normalised_speed_score),0) * 2)) AS consistency,
+                       MAX(meeting_date) AS latest_run_date
+                FROM prior;
+                """,
+                (rid, cutoff),
+            ) or {}
+            identity_source = "runner_id"
+        else:
+            rows = fetch_one(
+                """
+                WITH prior AS (
+                    SELECT normalised_speed_score, meeting_date,
+                           ROW_NUMBER() OVER (ORDER BY meeting_date DESC, id DESC) AS rn
+                    FROM rrt_runner_speed_history
+                    WHERE UPPER(TRIM(COALESCE(runner_name,''))) = UPPER(TRIM(%s))
+                      AND meeting_date < %s
+                      AND normalised_speed_score IS NOT NULL
+                    ORDER BY meeting_date DESC, id DESC
+                    LIMIT 5
+                )
+                SELECT COUNT(*) AS completed_runs,
+                       AVG(normalised_speed_score) FILTER (WHERE rn <= 3) AS avg_last3,
+                       AVG(normalised_speed_score) AS avg_last5,
+                       MAX(normalised_speed_score) AS best_score,
+                       GREATEST(0, LEAST(100, 100 - COALESCE(STDDEV_POP(normalised_speed_score),0) * 2)) AS consistency,
+                       MAX(meeting_date) AS latest_run_date
+                FROM prior;
+                """,
+                (name, cutoff),
+            ) or {}
+            identity_source = "runner_name_fallback"
+        runs = safe_int(rows.get("completed_runs"), 0)
         if runs <= 0:
-            return {"score":50.0,"completed_runs":0,"source":"neutral_no_history"}
-        score = (safe_float(row.get("avg_last3_speed_score"),50)*0.55 + safe_float(row.get("avg_last5_speed_score"),50)*0.25 +
-                 safe_float(row.get("best_speed_score"),50)*0.10 + safe_float(row.get("speed_consistency"),50)*0.10)
-        return {"score":round(clamp(score),1),"completed_runs":runs,"latest_speed_score":row.get("latest_speed_score"),
-                "avg_last3":row.get("avg_last3_speed_score"),"avg_last5":row.get("avg_last5_speed_score"),
-                "best":row.get("best_speed_score"),"consistency":row.get("speed_consistency"),
-                "latest_run_date":row.get("latest_run_date"),"source":"official_race_time_history"}
+            return {"score": 50.0, "completed_runs": 0, "source": "neutral_no_prior_history", "cutoff_date": cutoff}
+        avg3 = safe_float(rows.get("avg_last3"), 50)
+        avg5 = safe_float(rows.get("avg_last5"), 50)
+        best = safe_float(rows.get("best_score"), 50)
+        consistency = safe_float(rows.get("consistency"), 50)
+        score = avg3 * 0.55 + avg5 * 0.25 + best * 0.10 + consistency * 0.10
+        return {
+            "score": round(clamp(score), 1), "completed_runs": runs,
+            "avg_last3": round(avg3, 2), "avg_last5": round(avg5, 2),
+            "best": round(best, 2), "consistency": round(consistency, 2),
+            "latest_run_date": rows.get("latest_run_date"),
+            "cutoff_date": cutoff, "identity_source": identity_source,
+            "source": "pre_race_official_time_history", "leakage_safe": True,
+        }
     except Exception:
-        return {"score":50.0,"completed_runs":0,"source":"neutral_lookup_error"}
+        return {"score": 50.0, "completed_runs": 0, "source": "neutral_lookup_error", "cutoff_date": cutoff}
 
 
 def score_each_way_profile(runner: Dict[str, Any]) -> float:
@@ -477,7 +534,11 @@ def score_runner(
     barrier_score = score_barrier(runner.get("barrier"), field_size)
     weight_score = score_weight(runner.get("weight_kg"))
     market_score = score_price(runner.get("price_sp"))
-    speed_profile = get_normalised_speed_rating(runner.get("runner_id"))
+    speed_profile = get_normalised_speed_rating(
+        runner.get("runner_id"),
+        race.get("meeting_date") or race.get("date") or runner.get("meeting_date"),
+        runner.get("horse_name") or runner.get("runner"),
+    )
     speed_score = safe_float(speed_profile.get("score"), 50.0)
 
     final_score = (
@@ -1429,8 +1490,10 @@ def predict_from_form_data(
     meeting_metadata_merge = form_data.get("meeting_metadata_merge") or {}
     scratchings_merge = form_data.get("scratchings_merge") or {}
 
+    meeting_date_for_speed = (condition_data or {}).get("meeting_date") or meeting_metadata_merge.get("meeting_date")
     eligible_races = [
-        race for race in races
+        {**race, "meeting_date": race.get("meeting_date") or meeting_date_for_speed}
+        for race in races
         if not is_barrier_trial_race(race)
     ]
 
@@ -1463,7 +1526,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.5a",
+                "version": "2.19.5b",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1553,7 +1616,7 @@ def predict_from_form_data(
             ),
         },
         "factor_capture": {
-            "version": "2.19.5a",
+            "version": "2.19.5b",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),

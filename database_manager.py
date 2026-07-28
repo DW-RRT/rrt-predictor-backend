@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.19.5a"
+SCHEMA_VERSION = "2.19.5b"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -224,7 +224,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 attempt_count, last_batch_id, processed_at, updated_at
             )
             SELECT sh.meeting_id, MAX(sh.meeting_date), 'completed_with_rows', COUNT(*),
-                   1, 'pre-2.19.5a-migration', NOW(), NOW()
+                   1, 'pre-2.19.5b-migration', NOW(), NOW()
             FROM rrt_runner_speed_history sh
             GROUP BY sh.meeting_id
             ON CONFLICT(meeting_id) DO NOTHING;
@@ -370,7 +370,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
             UPDATE rrt_model_weight_sets
             SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.19.5a';
+            WHERE status = 'Active' AND model_version <> '2.19.5b';
             """
         )
         execute_sql(
@@ -379,8 +379,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
               ('2.18.3','Archive',%s::jsonb,'RRT Predictor','Verified pre-calibration baseline.',NULL,FALSE),
-              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.5a selection and speed-rating operation.',NULL,FALSE),
-              ('2.19.5a','Active',%s::jsonb,'RRT Predictor','v2.19.5a production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
+              ('2.18.4','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.5b selection and speed-rating operation.',NULL,FALSE),
+              ('2.19.5b','Active',%s::jsonb,'RRT Predictor','v2.19.5b production set with unchanged calibrated factor weights. Future promotion is controlled by the adaptive safety gate.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=CASE WHEN rrt_model_weight_sets.status='Active' THEN rrt_model_weight_sets.weights_json ELSE EXCLUDED.weights_json END,
@@ -468,8 +468,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.19.5a",
-                "RRT Predictor v2.19.5a distinct Win/Each-Way/Roughie scoring and Normalised Speed Rating capture.",
+                "2.19.5b",
+                "RRT Predictor v2.19.5b distinct Win/Each-Way/Roughie scoring and Normalised Speed Rating capture.",
                 True,
             ),
         )
@@ -752,7 +752,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.19.5a",
+    model_version: str = "2.19.5b",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -1456,9 +1456,9 @@ def save_speed_ratings_from_results(results_snapshot: Dict[str, Any]) -> Dict[st
                 best_speed_score=EXCLUDED.best_speed_score,speed_consistency=EXCLUDED.speed_consistency,
                 latest_run_date=EXCLUDED.latest_run_date,updated_at=NOW();""",
                 (runner_id,rows[0].get("runner_name"),len(scores),scores[0],round(avg3,2),round(avg5,2),max(scores),round(consistency,2),rows[0].get("meeting_date")))
-        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.5a","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
+        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.5b","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
     except Exception as error:
-        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.5a","error":str(error)}
+        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.5b","error":str(error)}
 
 
 def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
@@ -1576,7 +1576,7 @@ def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
     response = {
         "success": not failures,
         "provider": "PostgreSQL",
-        "speed_version": "2.19.5a",
+        "speed_version": "2.19.5b",
         "batch_id": batch_id,
         "status": status,
         "meeting_limit": meeting_limit,
@@ -1610,6 +1610,122 @@ def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
     return response
 
 
+
+def integrate_speed_ratings_into_factor_snapshots() -> Dict[str, Any]:
+    """Populate historical factor rows with leakage-safe pre-race Speed Ratings.
+
+    A runner factor row is enriched only from official-time speed history dated
+    strictly before that row's meeting date. Runner ID is the primary join key;
+    normalised runner name is used only when the factor row has no runner ID.
+    Production weights are not changed and weighted_speed remains zero.
+    """
+    try:
+        before = fetch_one(
+            """SELECT COUNT(*) AS total_rows,
+                      COUNT(*) FILTER (WHERE speed_score IS NOT NULL) AS populated_rows
+               FROM rrt_runner_factor_snapshots;"""
+        ) or {}
+
+        execute_sql(
+            """
+            WITH enriched AS (
+                SELECT
+                    fs.id,
+                    ROUND((
+                        COALESCE(s.avg_last3, 50) * 0.55
+                      + COALESCE(s.avg_last5, 50) * 0.25
+                      + COALESCE(s.best_score, 50) * 0.10
+                      + COALESCE(s.consistency, 50) * 0.10
+                    )::numeric, 2) AS pre_race_speed_score,
+                    s.prior_run_count
+                FROM rrt_runner_factor_snapshots fs
+                JOIN LATERAL (
+                    SELECT
+                        COUNT(*)::integer AS prior_run_count,
+                        AVG(normalised_speed_score) FILTER (WHERE rn <= 3) AS avg_last3,
+                        AVG(normalised_speed_score) AS avg_last5,
+                        MAX(normalised_speed_score) AS best_score,
+                        GREATEST(0, LEAST(100, 100 - COALESCE(STDDEV_POP(normalised_speed_score), 0) * 2)) AS consistency
+                    FROM (
+                        SELECT
+                            h.normalised_speed_score,
+                            ROW_NUMBER() OVER (ORDER BY h.meeting_date DESC, h.id DESC) AS rn
+                        FROM rrt_runner_speed_history h
+                        WHERE h.normalised_speed_score IS NOT NULL
+                          AND h.meeting_date < fs.meeting_date
+                          AND (
+                                (fs.runner_id IS NOT NULL AND fs.runner_id > 0 AND h.runner_id = fs.runner_id)
+                             OR ((fs.runner_id IS NULL OR fs.runner_id <= 0)
+                                 AND UPPER(TRIM(COALESCE(h.runner_name, ''))) = UPPER(TRIM(COALESCE(fs.runner_name, ''))))
+                          )
+                        ORDER BY h.meeting_date DESC, h.id DESC
+                        LIMIT 5
+                    ) prior_runs
+                ) s ON s.prior_run_count > 0
+                WHERE fs.actual_position IS NOT NULL
+                  AND fs.meeting_date IS NOT NULL
+            )
+            UPDATE rrt_runner_factor_snapshots fs
+            SET speed_score = enriched.pre_race_speed_score,
+                weighted_speed = 0,
+                factor_json = jsonb_set(
+                    jsonb_set(COALESCE(fs.factor_json, '{}'::jsonb),
+                              '{score_breakdown,speed_rating}',
+                              to_jsonb(enriched.pre_race_speed_score), true),
+                    '{speed_integration}',
+                    jsonb_build_object(
+                        'version', '2.19.5b',
+                        'method', 'pre_race_official_time_history',
+                        'prior_runs_used', enriched.prior_run_count,
+                        'leakage_safe', true,
+                        'in_run_used', false
+                    ), true
+                ),
+                updated_at = NOW()
+            FROM enriched
+            WHERE fs.id = enriched.id;
+            """
+        )
+
+        after = fetch_one(
+            """SELECT COUNT(*) AS total_rows,
+                      COUNT(*) FILTER (WHERE speed_score IS NOT NULL) AS populated_rows,
+                      COUNT(*) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS completed_rows_with_speed,
+                      COUNT(DISTINCT meeting_id) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS completed_meetings_with_speed,
+                      MIN(meeting_date) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS first_speed_date,
+                      MAX(meeting_date) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS latest_speed_date,
+                      ROUND(AVG(speed_score) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL), 2) AS avg_pre_race_speed_score
+               FROM rrt_runner_factor_snapshots;"""
+        ) or {}
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "speed_version": "2.19.5b",
+            "analysis_only": True,
+            "prediction_model_changed": False,
+            "production_speed_weight": 0,
+            "before": before,
+            "after": after,
+            "rows_enriched_this_request": max(
+                0,
+                int(after.get("populated_rows") or 0) - int(before.get("populated_rows") or 0),
+            ),
+            "join_policy": "runner_id_primary_name_fallback_only_when_runner_id_missing",
+            "history_cutoff": "strictly_before_meeting_date",
+            "leakage_safe": True,
+            "in_run_used": False,
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "speed_version": "2.19.5b",
+            "analysis_only": True,
+            "error": str(error),
+        }
+
+
 def get_speed_rating_summary() -> Dict[str, Any]:
     totals = fetch_one("""SELECT COUNT(*) AS history_rows,COUNT(DISTINCT runner_id) AS runner_count,
         COUNT(DISTINCT meeting_id) AS meeting_count,COUNT(DISTINCT race_id) AS race_count,
@@ -1622,8 +1738,14 @@ def get_speed_rating_summary() -> Dict[str, Any]:
         FROM rrt_speed_backfill_meetings GROUP BY outcome ORDER BY outcome;""")
     latest_batch = fetch_one("""SELECT batch_id,meeting_limit,meetings_selected,meetings_processed,runner_rows_saved,
         failure_count,status,started_at,completed_at FROM rrt_speed_backfill_runs ORDER BY id DESC LIMIT 1;""") or {}
+    integration = fetch_one("""SELECT COUNT(*) AS factor_rows,
+        COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS completed_factor_rows,
+        COUNT(*) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS completed_rows_with_speed,
+        COUNT(DISTINCT meeting_id) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL) AS completed_meetings_with_speed,
+        ROUND(AVG(speed_score) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL),2) AS avg_pre_race_speed_score
+        FROM rrt_runner_factor_snapshots;""") or {}
     remaining = int(pending.get("count") or 0)
-    return {"success":True,"speed_version":"2.19.5a","analysis_only":True,"totals":totals,"profiles":profiles,
+    return {"success":True,"speed_version":"2.19.5b","analysis_only":True,"totals":totals,"profiles":profiles,"integration":integration,
             "backfill":{"remaining_meetings":remaining,"complete":remaining==0,"latest_batch":latest_batch,
                         "meeting_outcomes":outcome_counts},
             "resumable":True,"in_run_used":False}

@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.19.5a"
-MODEL_VERSION = "2.19.5a"
+REPLAY_VERSION = "2.19.5b"
+MODEL_VERSION = "2.19.5b"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -158,7 +158,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.19.5a production-versus-candidate replay",
+    replay_name: str = "v2.19.5b production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -191,7 +191,8 @@ def run_historical_replay(
             "production_weights_changed": False, "model_version": model_version,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "dataset": {"runner_count": len(rows), "race_count": len(groups), "meeting_count": len({r.get('meeting_id') for r in rows}),
-                        "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
+                        "min_meeting_date": min((r.get("meeting_date") for r in rows if r.get("meeting_date") is not None), default=None),
+                        "max_meeting_date": max((r.get("meeting_date") for r in rows if r.get("meeting_date") is not None), default=None)},
             "production_weights": current_weights, "candidate_weights": weights,
             "roughie_rules": {"method": "ranks_5_to_8_outside_top4", "thresholds_applied": False},
             "current_metrics": {k: v for k, v in current.items() if k != "selections"},
@@ -209,7 +210,7 @@ def run_historical_replay(
                  dataset_runner_count, dataset_race_count, dataset_meeting_count, current_weights_json,
                  replay_weights_json, current_metrics_json, replay_metrics_json, improvement_json, replay_json)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
-                (replay_id, replay_name, REPLAY_VERSION, model_version, min_meeting_date, max_meeting_date,
+                (replay_id, replay_name, REPLAY_VERSION, model_version, result["dataset"].get("min_meeting_date"), result["dataset"].get("max_meeting_date"),
                  len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(current_weights),
                  json.dumps(weights), json.dumps(result["current_metrics"]), json.dumps(result["replay_metrics"]),
                  json.dumps(improvement), json.dumps(result, default=str)),

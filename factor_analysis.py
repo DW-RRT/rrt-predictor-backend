@@ -2,8 +2,8 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.19.5a"
-MODEL_VERSION = "2.19.5a"
+ANALYSIS_VERSION = "2.19.5b"
+MODEL_VERSION = "2.19.5b"
 
 FACTOR_COLUMNS = [
     {"key": "last10", "label": "Last 10 Form", "score_column": "last10_score", "weighted_column": "weighted_last10"},
