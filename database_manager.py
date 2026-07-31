@@ -730,7 +730,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
                 prediction_snapshot.get("weather"),
                 prediction_snapshot.get("eligible_race_count"),
                 prediction_snapshot.get("runner_count"),
-                json.dumps(prediction_snapshot),
+                json.dumps(prediction_snapshot, default=str),
             ),
         )
 
@@ -862,7 +862,7 @@ def save_results_snapshot(results_snapshot: Dict[str, Any]) -> Dict[str, Any]:
                 results_snapshot.get("track"),
                 results_snapshot.get("meeting_date"),
                 results_snapshot.get("results_updated"),
-                json.dumps(results_snapshot),
+                json.dumps(results_snapshot, default=str),
             ),
         )
 
@@ -939,7 +939,7 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
                 (accuracy.get("best_double") or {}).get("strike_rate"),
                 (accuracy.get("best_quaddie") or {}).get("strike_rate"),
                 pf_ai_top_win.get("strike_rate"),
-                json.dumps(performance_snapshot),
+                json.dumps(performance_snapshot, default=str),
             ),
         )
 
@@ -1220,7 +1220,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     weighted.get("weight"),
                     weighted.get("market_price"),
                     weighted.get("speed_rating"),
-                    json.dumps(runner),
+                    json.dumps(runner, default=str),
                 ),
             )
 

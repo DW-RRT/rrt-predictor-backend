@@ -2316,14 +2316,18 @@ def _compare_prediction_to_results(
 # Automatic Results Processor - RRT Predictor v2.19.6
 # ---------------------------------------------------------------------
 
-def _process_single_meeting_results(meeting_id: int) -> Dict[str, Any]:
+def _process_single_meeting_results(
+    meeting_id: int,
+    model_version: Optional[str] = None,
+) -> Dict[str, Any]:
     prediction_snapshot = PREDICTION_HISTORY.get(str(meeting_id))
     prediction_source = "memory"
 
     if not prediction_snapshot:
+        requested_model_version = str(model_version or "2.19.6")
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
-            model_version="2.19.6",
+            model_version=requested_model_version,
         )
 
         if not postgres_prediction.get("success"):
@@ -2427,7 +2431,10 @@ def run_results_processor_once(
             })
             continue
 
-        result = _process_single_meeting_results(meeting_id=int(meeting_id))
+        result = _process_single_meeting_results(
+            meeting_id=int(meeting_id),
+            model_version=item.get("model_version"),
+        )
 
         if result.get("success"):
             processed.append({
@@ -2600,16 +2607,21 @@ def api_punting_form_predict(
                 prediction_response=prediction_response,
             )
 
+            postgres_history = snapshot.get("postgres_history") or {}
+            factor_history = snapshot.get("factor_capture_history") or {}
             prediction_response["prediction_history"] = {
-                "saved": True,
+                "saved": bool(postgres_history.get("success")),
                 "saved_at": snapshot.get("saved_at"),
                 "storage": "in_memory + PostgreSQL",
-                "postgres_saved": snapshot.get("postgres_history", {}).get("success"),
-                "postgres_message": snapshot.get("postgres_history", {}).get("message"),
-                "factor_capture_saved": snapshot.get("factor_capture_history", {}).get("success"),
-                "factor_capture_saved_count": snapshot.get("factor_capture_history", {}).get("saved_count"),
-                "factor_capture_message": snapshot.get("factor_capture_history", {}).get("message"),
-                "note": "Prediction snapshot and runner-level factor capture stored for v2.19.6 native full-field PostgreSQL factor analysis, automatic results processing, and persistent learning.",
+                "postgres_saved": bool(postgres_history.get("success")),
+                "postgres_message": postgres_history.get("message"),
+                "postgres_error": postgres_history.get("error"),
+                "factor_capture_saved": bool(factor_history.get("success")),
+                "factor_capture_saved_count": factor_history.get("saved_count"),
+                "factor_capture_message": factor_history.get("message"),
+                "factor_capture_error": factor_history.get("error"),
+                "model_version": snapshot.get("model_version"),
+                "note": "v2.19.6 persistence status is reported from the actual PostgreSQL save response; runner-factor capture is reported separately.",
             }
 
         return prediction_response
