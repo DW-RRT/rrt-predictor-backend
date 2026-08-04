@@ -1152,7 +1152,166 @@ def get_each_way_leaderboards(
 
         trainers = entity_query(trainer_expr, "trainer", max(int(min_runners), MIN_TRAINER_RUNNERS))
         jockeys = entity_query(jockey_expr, "jockey", max(int(min_runners), MIN_JOCKEY_RUNNERS))
-        horses = entity_query(horse_expr, "horse", MIN_HORSE_RUNS, HISTORICAL_HORSE_LIMIT)
+
+        # Historical horse performance must be based on distinct actual race starts,
+        # not on repeated model-version snapshots for the same horse and race.
+        horses = fetch_all(
+            f"""
+            WITH completed_rows AS (
+                SELECT
+                    id,
+                    meeting_id,
+                    meeting_date,
+                    race_id,
+                    race_number,
+                    runner_id,
+                    tab_number,
+                    updated_at,
+                    created_at,
+                    {horse_expr} AS horse,
+                    {trainer_expr} AS trainer,
+                    actual_position,
+                    final_score,
+                    confidence,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            meeting_id,
+                            COALESCE(race_id::TEXT, race_number::TEXT, ''),
+                            CASE
+                                WHEN runner_id IS NOT NULL AND runner_id > 0
+                                    THEN 'ID:' || runner_id::TEXT
+                                ELSE 'NAME:' || UPPER(TRIM(COALESCE(
+                                    {horse_expr},
+                                    ''
+                                ))) || '|TAB:' || COALESCE(tab_number::TEXT, '')
+                            END
+                        ORDER BY
+                            updated_at DESC NULLS LAST,
+                            created_at DESC NULLS LAST,
+                            id DESC
+                    ) AS start_snapshot_rank
+                FROM rrt_runner_factor_snapshots
+                WHERE actual_position IS NOT NULL
+                  AND {horse_expr} IS NOT NULL
+                  AND UPPER({horse_expr}) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+            ),
+            distinct_starts AS (
+                SELECT
+                    meeting_id,
+                    meeting_date,
+                    race_id,
+                    race_number,
+                    runner_id,
+                    tab_number,
+                    horse,
+                    trainer,
+                    actual_position,
+                    final_score,
+                    confidence,
+                    updated_at,
+                    created_at
+                FROM completed_rows
+                WHERE start_snapshot_rank = 1
+            ),
+            horse_rollup AS (
+                SELECT
+                    COALESCE(
+                        CASE
+                            WHEN runner_id IS NOT NULL AND runner_id > 0
+                                THEN 'ID:' || runner_id::TEXT
+                            ELSE NULL
+                        END,
+                        'NAME:' || UPPER(TRIM(horse))
+                    ) AS horse_key,
+                    MAX(horse) AS horse,
+                    COUNT(*) AS runner_count,
+                    SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END) AS win_count,
+                    SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS place_count,
+                    ROUND(
+                        (SUM(CASE WHEN actual_position = 1 THEN 1 ELSE 0 END)::NUMERIC
+                        / NULLIF(COUNT(*), 0)) * 100,
+                        2
+                    ) AS win_strike_rate,
+                    ROUND(
+                        (SUM(CASE WHEN actual_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END)::NUMERIC
+                        / NULLIF(COUNT(*), 0)) * 100,
+                        2
+                    ) AS place_strike_rate,
+                    ROUND(AVG(final_score), 2) AS avg_final_score,
+                    ROUND(AVG(confidence), 2) AS avg_confidence
+                FROM distinct_starts
+                GROUP BY
+                    COALESCE(
+                        CASE
+                            WHEN runner_id IS NOT NULL AND runner_id > 0
+                                THEN 'ID:' || runner_id::TEXT
+                            ELSE NULL
+                        END,
+                        'NAME:' || UPPER(TRIM(horse))
+                    )
+                HAVING COUNT(*) >= %s
+            ),
+            latest_trainer AS (
+                SELECT DISTINCT ON (
+                    COALESCE(
+                        CASE
+                            WHEN runner_id IS NOT NULL AND runner_id > 0
+                                THEN 'ID:' || runner_id::TEXT
+                            ELSE NULL
+                        END,
+                        'NAME:' || UPPER(TRIM(horse))
+                    )
+                )
+                    COALESCE(
+                        CASE
+                            WHEN runner_id IS NOT NULL AND runner_id > 0
+                                THEN 'ID:' || runner_id::TEXT
+                            ELSE NULL
+                        END,
+                        'NAME:' || UPPER(TRIM(horse))
+                    ) AS horse_key,
+                    trainer
+                FROM distinct_starts
+                WHERE trainer IS NOT NULL
+                  AND UPPER(trainer) NOT IN ('N/A', 'UNKNOWN', 'NONE')
+                ORDER BY
+                    COALESCE(
+                        CASE
+                            WHEN runner_id IS NOT NULL AND runner_id > 0
+                                THEN 'ID:' || runner_id::TEXT
+                            ELSE NULL
+                        END,
+                        'NAME:' || UPPER(TRIM(horse))
+                    ),
+                    meeting_date DESC NULLS LAST,
+                    updated_at DESC NULLS LAST,
+                    created_at DESC NULLS LAST
+            )
+            SELECT
+                hr.horse,
+                COALESCE(lt.trainer, 'Not recorded') AS trainer,
+                hr.runner_count,
+                hr.win_count,
+                hr.place_count,
+                hr.win_strike_rate,
+                hr.place_strike_rate,
+                hr.avg_final_score,
+                hr.avg_confidence
+            FROM horse_rollup hr
+            LEFT JOIN latest_trainer lt
+              ON lt.horse_key = hr.horse_key
+            ORDER BY
+                hr.place_strike_rate DESC,
+                hr.win_strike_rate DESC,
+                hr.place_count DESC,
+                hr.win_count DESC,
+                hr.runner_count DESC,
+                hr.avg_final_score DESC,
+                hr.horse ASC
+            LIMIT %s;
+            """,
+            (MIN_HORSE_RUNS, HISTORICAL_HORSE_LIMIT),
+        )
         for horse in horses:
             horse["evidence_status"] = "Established" if _to_int(horse.get("runner_count")) >= 5 else "Emerging"
 
@@ -1195,8 +1354,8 @@ def get_each_way_leaderboards(
             },
             "limit": limit,
             "historical_horse_limit": HISTORICAL_HORSE_LIMIT,
-            "ranking_method": "All completed runner-factor rows; ranked by place strike rate, then win strike rate and sample size after minimum sample thresholds.",
-            "horse_ranking_note": "This is an aggregated historical horse leaderboard across completed runs. It is separate from the per-meeting Top 20 prediction ranking.",
+            "ranking_method": "Trainer, jockey and combination leaderboards use completed runner-factor rows. Historical horses are deduplicated to one row per actual start before win/place rates are calculated.",
+            "horse_ranking_note": "This is an aggregated historical horse leaderboard across distinct actual starts. Repeated model-version snapshots for the same meeting, race and runner are counted once. It is separate from the per-meeting Top 20 prediction ranking.",
             "dataset": totals,
             "top_trainers": _rank_rows(trainers),
             "top_jockeys": _rank_rows(jockeys),
@@ -1376,8 +1535,8 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Jockeys</h3>', _html_table(['Rank','Jockey','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('jockey'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_jockeys') or [])[:10]]),
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Top 20 Historical Horse Performance</h3>',
-        '<div class="note">Aggregated historical performance across completed runner-factor records. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.</div>',
-        (_html_table(['Rank','Horse','Status','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:20]]) if ((report.get('each_way_leaderboards') or {}).get('top_horses') or []) else '<div class="note">Insufficient historical horse performance data available. A minimum of two completed runs is required before inclusion.</div>'),
+        '<div class="note">Aggregated historical performance across distinct actual race starts. Repeated model-version snapshots for the same horse and race are counted once. The Trainer shown is from the latest completed recorded start. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.</div>',
+        (_html_table(['Rank','Horse','Trainer','Status','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:20]]) if ((report.get('each_way_leaderboards') or {}).get('top_horses') or []) else '<div class="note">Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.</div>'),
         '<h2>Evidence-Based Factor Analysis</h2>',
         '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active v2.20.1 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
@@ -1484,11 +1643,15 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(Paragraph("Top 10 Trainer / Jockey Combinations", styles["RRTHeading"]))
     story.append(t(["Rank","Combination","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_trainer_jockey_combinations') or [])[:10]]))
     story.append(Paragraph("Top 20 Historical Horse Performance", styles["RRTHeading"]))
-    story.append(Paragraph("Aggregated historical performance across completed runner-factor records. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.", styles["BodyText"]))
+    story.append(Paragraph("Aggregated historical performance across distinct actual race starts. Repeated model-version snapshots for the same horse and race are counted once. The Trainer shown is from the latest completed recorded start. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.", styles["BodyText"]))
     if leaderboards.get('top_horses'):
-        story.append(t(["Rank","Horse","Status","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"], [[i.get('rank'),i.get('horse'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:20]]))
+        story.append(t(
+            ["Rank","Horse","Trainer","Status","Runs","Wins","Places","Win %","Place %","Avg Score","Avg Conf"],
+            [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in (leaderboards.get('top_horses') or [])[:20]],
+            [0.7*cm, 2.6*cm, 2.8*cm, 1.6*cm, 0.8*cm, 0.8*cm, 0.9*cm, 1.1*cm, 1.1*cm, 1.3*cm, 1.3*cm],
+        ))
     else:
-        story.append(Paragraph("Insufficient historical horse performance data available. A minimum of two completed runs is required before inclusion.", styles["BodyText"]))
+        story.append(Paragraph("Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.", styles["BodyText"]))
     story.append(PageBreak())
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
     story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active v2.20.1 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.", styles["BodyText"]))
