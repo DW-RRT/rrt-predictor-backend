@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.20.0"
+SCHEMA_VERSION = "2.20.1"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -376,36 +376,33 @@ def init_postgres_schema() -> Dict[str, Any]:
         execute_sql("ALTER TABLE rrt_model_weight_sets ADD COLUMN IF NOT EXISTS promotion_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb;")
         execute_sql("ALTER TABLE rrt_model_weight_sets ADD COLUMN IF NOT EXISTS automatic_promotion BOOLEAN DEFAULT FALSE;")
 
-        execute_sql(
-            """
-            UPDATE rrt_model_weight_sets
-            SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.20.0';
-            """
-        )
+        # Seed the v2.20.0 production baseline only when no active model exists.
+        # Never overwrite or demote a later automatically promoted weight set.
+        active_weight_set = fetch_one(
+            "SELECT model_version FROM rrt_model_weight_sets WHERE status='Active' ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1;"
+        ) or {}
+        if not active_weight_set:
+            execute_sql(
+                """
+                INSERT INTO rrt_model_weight_sets
+                    (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
+                VALUES
+                  ('2.20.0','Active',%s::jsonb,'RRT Predictor','Intelligent Ranking Engine production baseline retained for v2.20.1 shadow promotion validation.',NOW(),FALSE)
+                ON CONFLICT (model_version) DO UPDATE SET
+                  status='Active', weights_json=EXCLUDED.weights_json, source=EXCLUDED.source,
+                  notes=EXCLUDED.notes, activated_at=NOW();
+                """,
+                (json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),),
+            )
         execute_sql(
             """
             INSERT INTO rrt_model_weight_sets
                 (model_version,status,weights_json,source,notes,activated_at,automatic_promotion)
             VALUES
-              ('2.18.4','Archive',%s::jsonb,'RRT Predictor','Earlier calibrated production baseline.',NULL,FALSE),
-              ('2.19.5b','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.6 Speed activation.',NULL,FALSE),
-              ('2.19.6','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.20.0 Intelligent Ranking Engine.',NULL,FALSE),
-              ('2.20.0','Active',%s::jsonb,'RRT Predictor','Intelligent Ranking Engine: shared Top 20 meeting ranking, distinct Each-Way profiles and value-index Roughies from ranks 5-20. Production factor weights unchanged.',NOW(),FALSE)
-            ON CONFLICT (model_version) DO UPDATE SET
-              status=EXCLUDED.status,
-              weights_json=EXCLUDED.weights_json,
-              source=EXCLUDED.source,
-              notes=EXCLUDED.notes,
-              automatic_promotion=EXCLUDED.automatic_promotion,
-              activated_at=CASE WHEN EXCLUDED.status='Active' THEN NOW() ELSE rrt_model_weight_sets.activated_at END;
+              ('2.19.6','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.20.0 Intelligent Ranking Engine.',NULL,FALSE)
+            ON CONFLICT (model_version) DO NOTHING;
             """,
-            (
-                json.dumps({'last10': 15, 'win_place': 9, 'track_record': 8, 'distance_record': 8, 'track_distance': 8, 'track_condition': 8, 'trainer': 7, 'jockey': 7, 'trainer_jockey': 9, 'barrier': 4, 'weight': 3, 'market': 14, 'speed': 0}),
-                json.dumps({'last10': 15, 'win_place': 9, 'track_record': 8, 'distance_record': 8, 'track_distance': 8, 'track_condition': 8, 'trainer': 7, 'jockey': 7, 'trainer_jockey': 9, 'barrier': 4, 'weight': 3, 'market': 14, 'speed': 0}),
-                json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),
-                json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),
-            ),
+            (json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),),
         )
 
         execute_sql(
@@ -426,6 +423,31 @@ def init_postgres_schema() -> Dict[str, Any]:
             );
             """
         )
+
+        execute_sql("ALTER TABLE rrt_weight_promotion_audit ADD COLUMN IF NOT EXISTS candidate_id TEXT;")
+        execute_sql("ALTER TABLE rrt_weight_promotion_audit ADD COLUMN IF NOT EXISTS simulator_id TEXT;")
+        execute_sql("ALTER TABLE rrt_weight_promotion_audit ADD COLUMN IF NOT EXISTS replay_id TEXT;")
+
+        execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS rrt_model_candidates (
+                id BIGSERIAL PRIMARY KEY,
+                candidate_id TEXT UNIQUE NOT NULL,
+                cycle_id TEXT,
+                base_weight_set TEXT,
+                status TEXT NOT NULL,
+                weights_json JSONB NOT NULL,
+                simulator_id TEXT,
+                replay_id TEXT,
+                gate_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                decision_reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                evaluated_at TIMESTAMPTZ,
+                promoted_at TIMESTAMPTZ
+            );
+            """
+        )
+        execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_model_candidates_status ON rrt_model_candidates(status, created_at DESC);")
 
         execute_sql(
             """
@@ -481,8 +503,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.20.0",
-                "RRT Predictor v2.20.0 Intelligent Ranking Engine with shared Top 20 meeting rankings and value-index Roughies from ranks 5-20.",
+                "2.20.1",
+                "RRT Predictor v2.20.1 Autonomous Model Promotion Controller in shadow mode with Simulator, Replay and rollback gates.",
                 True,
             ),
         )
@@ -506,6 +528,7 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_factor_recommendations",
                 "rrt_model_weight_sets",
                 "rrt_weight_promotion_audit",
+                "rrt_model_candidates",
                 "rrt_runner_speed_history",
                 "rrt_runner_speed_profiles",
                 "rrt_speed_backfill_runs",
@@ -577,6 +600,7 @@ def get_database_summary() -> Dict[str, Any]:
         learning_cycle_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_learning_cycles;")
         factor_recommendation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_factor_recommendations;")
         weight_set_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_model_weight_sets;")
+        candidate_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_model_candidates;")
 
         averages = fetch_one(
             """
@@ -644,6 +668,7 @@ def get_database_summary() -> Dict[str, Any]:
                 "learning_cycles": int((learning_cycle_count or {}).get("count") or 0),
                 "factor_recommendations": int((factor_recommendation_count or {}).get("count") or 0),
                 "model_weight_sets": int((weight_set_count or {}).get("count") or 0),
+                "model_candidates": int((candidate_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,

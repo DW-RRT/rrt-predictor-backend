@@ -8,9 +8,9 @@ from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import run_weight_simulation
 from selection_intelligence import run_selection_intelligence_analysis
 
-LEARNING_VERSION = "2.20.0a"
-MODEL_VERSION = "2.20.0a"
-AUTO_PROMOTION_ENABLED = False  # v2.20.0a: Speed active at 10%; automatic promotion remains disabled
+LEARNING_VERSION = "2.20.1"
+MODEL_VERSION = "2.20.1"
+AUTO_PROMOTION_ENABLED = False  # Promotion is controlled by promotion_engine.py; default deployment mode is shadow.
 MIN_NATIVE_RACES = int(os.getenv("RRT_PROMOTION_MIN_NATIVE_RACES", "150"))
 MIN_COMPLETED_RUNNERS = int(os.getenv("RRT_PROMOTION_MIN_COMPLETED_RUNNERS", "1200"))
 MIN_OVERALL_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_OVERALL_IMPROVEMENT", "1.0"))
@@ -86,7 +86,12 @@ def _promote(cycle_id:str, current:Dict[str,Any], proposed:Dict[str,float], gate
        (promotion_id,cycle_id,current.get("model_version"),new_id,json.dumps(gate,default=str),json.dumps(current.get("weights_json") or {}),json.dumps(proposed)))
     return {"applied":True,"promotion_id":promotion_id,"from_weight_set":current.get("model_version"),"to_weight_set":new_id,"weights":proposed}
 
-def run_adaptive_learning_cycle(cycle_name:str="v2.20.0a autonomous adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
+def run_adaptive_learning_cycle(cycle_name:str="v2.20.1 adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
+    """Generate and store the adaptive candidate without changing production weights.
+
+    v2.20.1 separates learning from promotion. The Promotion Controller evaluates
+    this candidate through Simulator and Replay under /api/model/run-promotion-cycle.
+    """
     try:
       factors=get_factor_effectiveness_report(); weights=get_weight_recommendations(); dataset=_dataset()
       if isinstance(factors, dict):
@@ -95,27 +100,18 @@ def run_adaptive_learning_cycle(cycle_name:str="v2.20.0a autonomous adaptive lea
         factors["analysis_only"] = True
         factors["prediction_model_changed"] = False
       if isinstance(weights, dict):
-        weights["recommendation_version"] = "2.20.0a"
+        weights["recommendation_version"] = LEARNING_VERSION
         weights["analysis_only"] = True
         weights["prediction_model_changed"] = False
-        weights["safety_note"] = "v2.20.0a recommendations are analysis-only; automatic promotion is disabled and Speed is active at 10%; Top 20 category logic is active."
+        weights["safety_note"] = "v2.20.1 creates an adaptive candidate only. Promotion is evaluated separately by the shadow-mode Promotion Controller."
       if not factors.get("success") or not weights.get("success"):
         return {"success":False,"learning_version":LEARNING_VERSION,"factor_report":factors,"weight_report":weights}
       selection=run_selection_intelligence_analysis(save_result=True)
       proposed=_candidate(weights)
-      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.20.0a adaptive promotion candidate",notes="Automatic promotion-gate validation.",save_result=True,simulation_group="v2.20.0a promotion gate")
-      gate=_gate(dataset,sim)
+      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.20.1 adaptive candidate preview",notes="Candidate preview only; final promotion validation also requires Replay.",save_result=True,simulation_group="v2.20.1 adaptive-preview")
       cycle_id=f"learn-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-      current=_active_weight_row(); promotion={"applied":False,"reason":"Promotion gate not authorised."}
-      if gate.get("promotion_authorised"):
-        promotion=_promote(cycle_id,current,proposed,gate)
-      else:
-        promotion_id=f"audit-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        execute_sql("""INSERT INTO rrt_weight_promotion_audit(promotion_id,cycle_id,from_weight_set,to_weight_set,decision,gate_json,previous_weights_json,proposed_weights_json,applied)
-          VALUES(%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,FALSE);""",
-          (promotion_id,cycle_id,current.get("model_version"),"candidate-held",gate.get("decision") or "Monitor",json.dumps(gate,default=str),json.dumps(current.get("weights_json") or {}),json.dumps(proposed)))
-        promotion={"applied":False,"promotion_id":promotion_id,"reason":"Candidate held; promotion safeguards not satisfied."}
-      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":not bool(promotion.get("applied")),"weights_changed_by_this_cycle":bool(promotion.get("applied")),"production_weights_active":True,"automatic_weight_changes_enabled":AUTO_PROMOTION_ENABLED,"historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":gate,"promotion":promotion,"safety_note":"v2.20.0a uses the manually approved 10% Speed production weight and the Top 20 ranking framework. Automatic promotion remains disabled; future changes remain analysis-only."}
+      current=_active_weight_row()
+      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":True,"weights_changed_by_this_cycle":False,"production_weights_active":True,"automatic_weight_changes_enabled":False,"promotion_controller":"shadow","historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":{"decision":"Pending Promotion Controller","promotion_authorised":False},"promotion":{"applied":False,"reason":"Run /api/model/run-promotion-cycle to evaluate this candidate through Simulator and Replay."},"safety_note":"v2.20.1 learning remains analysis-only. Shadow promotion is handled by promotion_engine.py and cannot change live weights."}
       if save_result:
         execute_sql("""INSERT INTO rrt_learning_cycles(cycle_id,cycle_name,learning_version,model_version,dataset_json,factor_report_json,weight_report_json,simulation_report_json,selection_report_json,recommendations_json,cycle_json)
           VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
@@ -139,4 +135,4 @@ def get_learning_recommendation_history(limit:int=100)->Dict[str,Any]:
 def get_adaptive_learning_summary()->Dict[str,Any]:
     summary=fetch_one("SELECT COUNT(*) AS cycle_count,MAX(created_at) AS latest_cycle_at FROM rrt_learning_cycles;") or {}
     active=_active_weight_row(); audit=fetch_one("SELECT COUNT(*) AS promotion_count,MAX(created_at) AS latest_promotion_at FROM rrt_weight_promotion_audit WHERE applied IS TRUE;") or {}
-    return {"success":True,"learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"summary":summary,"active_weight_set":active,"automatic_weight_changes_enabled":AUTO_PROMOTION_ENABLED,"promotion_summary":audit,"dataset":_dataset(),"weights_changed_by_this_request":False,"historical_learning_retained":True,"native_full_field_capture_active":True,"reconstructed_full_field_history_required":False}
+    return {"success":True,"learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"summary":summary,"active_weight_set":active,"automatic_weight_changes_enabled":False,"promotion_summary":audit,"dataset":_dataset(),"weights_changed_by_this_request":False,"historical_learning_retained":True,"native_full_field_capture_active":True,"reconstructed_full_field_history_required":False}
