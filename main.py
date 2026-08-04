@@ -145,9 +145,15 @@ from adaptive_learning_engine import (
     get_adaptive_learning_summary,
 )
 
+
+from profile_cache_engine import (
+    refresh_meeting_profiles, refresh_strike_rates, get_profile_cache_summary,
+    get_historical_horse_leaderboard, get_strike_rate_leaderboard, get_entity_profile,
+)
+
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.20.1",
+    version="2.21.0",
 )
 
 app.add_middleware(
@@ -852,10 +858,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.20.1",
+        "version": "2.21.0",
         "app_version": "1.0.0",
-        "backend_version": "2.20.1",
-        "model_version": "2.20.1",
+        "backend_version": "2.21.0",
+        "model_version": "2.21.0",
     }
 
 
@@ -865,10 +871,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.20.1",
+        "version": "2.21.0",
         "app_version": "1.0.0",
-        "backend_version": "2.20.1",
-        "model_version": "2.20.1",
+        "backend_version": "2.21.0",
+        "model_version": "2.21.0",
         "cache_ttl_seconds": 300
     }
 
@@ -947,6 +953,13 @@ def api_route_check():
         "/api/adaptive-learning/history": True,
         "/api/adaptive-learning/recommendations": True,
         "/api/adaptive-learning/summary": True,
+        "/api/profiles/summary": True,
+        "/api/profiles/refresh-meeting": True,
+        "/api/profiles/refresh-strike-rates": True,
+        "/api/profiles/horses/top": True,
+        "/api/profiles/trainers/top": True,
+        "/api/profiles/jockeys/top": True,
+        "/api/profiles/entity": True,
     }
 
     route_availability = {
@@ -957,11 +970,11 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.20.1",
+        "version": "2.21.0",
         "app_version": "1.0.0",
-        "backend_version": "2.20.1",
-        "model_version": "2.20.1",
-        "database_schema_version": "2.20.1",
+        "backend_version": "2.21.0",
+        "model_version": "2.21.0",
+        "database_schema_version": "2.21.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
             route_availability.get(route)
@@ -1066,6 +1079,38 @@ def api_route_check():
         "registered_route_count": len(registered_routes),
         "registered_routes": registered_routes,
     }
+
+# ---------------------------------------------------------------------
+# Historical Profile Intelligence Routes - RRT Predictor v2.21.0
+# ---------------------------------------------------------------------
+
+@app.get("/api/profiles/summary")
+def api_profiles_summary():
+    return get_profile_cache_summary()
+
+@app.get("/api/profiles/refresh-meeting")
+def api_profiles_refresh_meeting(meeting_id:int,runs:int=Query(10,ge=1,le=20),include_strike_rates:bool=True):
+    return refresh_meeting_profiles(meeting_id=meeting_id,runs=runs,include_strike_rates=include_strike_rates)
+
+@app.get("/api/profiles/refresh-strike-rates")
+def api_profiles_refresh_strike_rates(meeting_id:Optional[int]=None,start_date:Optional[str]=None):
+    return refresh_strike_rates(meeting_id=meeting_id,start_date=start_date,force=True)
+
+@app.get("/api/profiles/horses/top")
+def api_profiles_horses_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query(5,ge=1)):
+    return get_historical_horse_leaderboard(limit=limit,min_starts=min_starts)
+
+@app.get("/api/profiles/trainers/top")
+def api_profiles_trainers_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query(100,ge=1),period:str='last100'):
+    return get_strike_rate_leaderboard('trainer',limit,min_starts,period)
+
+@app.get("/api/profiles/jockeys/top")
+def api_profiles_jockeys_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query(100,ge=1),period:str='last100'):
+    return get_strike_rate_leaderboard('jockey',limit,min_starts,period)
+
+@app.get("/api/profiles/entity")
+def api_profiles_entity(entity_type:str,entity_name:Optional[str]=None,entity_id:Optional[int]=None):
+    return get_entity_profile(entity_type,entity_name,entity_id)
 
 # ---------------------------------------------------------------------
 # PostgreSQL Routes - RRT Predictor v2.9.0
@@ -1316,7 +1361,7 @@ def api_analysis_factor_trends(
 def api_analysis_weight_recommendations():
     report = get_weight_recommendations()
     if isinstance(report, dict):
-        report["recommendation_version"] = "2.20.1"
+        report["recommendation_version"] = "2.21.0"
         report["analysis_only"] = True
         report["prediction_model_changed"] = False
         report["safety_note"] = (
@@ -1428,12 +1473,12 @@ def api_model_weights():
     active_weights = active.get("weights_json") or {}
     rollback_weights = rollback.get("weights_json") or {}
     promotion_status = get_promotion_status()
-    return {"success":True,"model_version":"2.20.1","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":bool(promotion_status.get("automatic_weight_changes_enabled")),"promotion_mode":promotion_status.get("promotion_mode"),"shadow_mode_active":promotion_status.get("shadow_mode_active"),"last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
+    return {"success":True,"model_version":"2.21.0","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":bool(promotion_status.get("automatic_weight_changes_enabled")),"promotion_mode":promotion_status.get("promotion_mode"),"shadow_mode_active":promotion_status.get("shadow_mode_active"),"last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
 
 @app.get("/api/model/promotion-audit")
 def api_model_promotion_audit(limit: int = Query(20)):
     rows = fetch_all("SELECT promotion_id,cycle_id,from_weight_set,to_weight_set,decision,applied,rollback_available,created_at FROM rrt_weight_promotion_audit ORDER BY created_at DESC LIMIT %s;", (max(1,min(limit,100)),))
-    return {"success":True,"model_version":"2.20.1","audit_count":len(rows),"audits":rows}
+    return {"success":True,"model_version":"2.21.0","audit_count":len(rows),"audits":rows}
 
 @app.get("/api/model/promotion-status")
 def api_model_promotion_status():
@@ -2057,7 +2102,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.20.1",
+        "model_version": "2.21.0",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2369,7 +2414,7 @@ def _process_single_meeting_results(
     prediction_source = "memory"
 
     if not prediction_snapshot:
-        requested_model_version = str(model_version or "2.20.1")
+        requested_model_version = str(model_version or "2.21.0")
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
             model_version=requested_model_version,

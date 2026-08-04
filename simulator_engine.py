@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.20.1"
-MODEL_VERSION = "2.20.1"
+SIMULATOR_VERSION = "2.21.0"
+MODEL_VERSION = "2.21.0"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -178,7 +178,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -487,7 +487,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.20.1 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.21.0 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,

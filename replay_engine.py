@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.20.1"
-MODEL_VERSION = "2.20.1"
+REPLAY_VERSION = "2.21.0"
+MODEL_VERSION = "2.21.0"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -182,7 +182,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.20.1 production-versus-candidate replay",
+    replay_name: str = "v2.21.0 production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,

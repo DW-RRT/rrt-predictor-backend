@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.20.0a"
-MODEL_VERSION = "2.20.0a"
+SELECTION_INTELLIGENCE_VERSION = "2.21.0"
+MODEL_VERSION = "2.21.0"
 
 
 FACTOR_COLUMNS = [
@@ -56,7 +56,7 @@ def _load_completed_rows(
         "actual_position IS NOT NULL",
         "meeting_id IS NOT NULL",
         "race_number IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0')",
     ]
     params: List[Any] = []
 
@@ -298,7 +298,7 @@ def _build_selection_recommendations(
             "area": "Top 4 Boundary",
             "recommendation": "Test controlled promotion rules within the Top 20, prioritising runners ranked 5th to 8th where factor evidence is strong.",
             "evidence": f"{near_miss_count} races had winners ranked 5th to 8th.",
-            "next_step": "Use the v2.20.0a aligned simulator to validate controlled Top 20 promotion rules before any production change.",
+            "next_step": "Use the v2.21.0 aligned simulator to validate controlled Top 20 promotion rules before any production change.",
         })
 
     if boundary_rate >= 0.04:
@@ -336,7 +336,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} should influence selection promotion more strongly.",
                 "evidence": f"Missed winners averaged {avg_gap} points stronger than Top 4 selections on this factor.",
-                "next_step": "Use v2.20.0a promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
+                "next_step": "Use v2.21.0 promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
             })
         elif avg_gap <= -3:
             recommendations.append({
@@ -344,7 +344,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} is suppressing winners or over-rewarding false positives.",
                 "evidence": f"Missed winners averaged {avg_gap} points weaker than Top 4 selections on this factor.",
-                "next_step": "Use v2.20.0a promotion-gate simulation to test controlled reduction or gating rules.",
+                "next_step": "Use v2.21.0 promotion-gate simulation to test controlled reduction or gating rules.",
             })
 
     if not recommendations:
@@ -353,7 +353,7 @@ def _build_selection_recommendations(
             "area": "Selection Stability",
             "recommendation": "No dominant selection miss pattern was found. Continue collecting data and focus on value-index testing.",
             "evidence": "Misses are distributed across several factors rather than one clear driver.",
-            "next_step": "Continue collecting native full-field results and review again after additional v2.20.0a native results.",
+            "next_step": "Continue collecting native full-field results and review again after additional v2.21.0 native results.",
         })
 
     return recommendations
@@ -535,7 +535,7 @@ def get_latest_selection_analysis() -> Dict[str, Any]:
             SELECT MAX(updated_at) AS latest_completed_at
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
-              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a');
+              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0');
         """) or {}
         if (not row) or (latest_native.get("latest_completed_at") and row.get("generated_at") and row.get("generated_at") < latest_native.get("latest_completed_at")):
             return run_selection_intelligence_analysis(save_result=True)

@@ -10,13 +10,14 @@ from factor_analysis import get_factor_effectiveness_report, get_model_health_re
 from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
+from profile_cache_engine import get_historical_horse_leaderboard, get_strike_rate_leaderboard, get_profile_cache_summary
 
 
-REPORT_VERSION = "2.20.1"
-ANALYTICS_VERSION = "2.20.1"
-DATABASE_SCHEMA_VERSION = "2.20.1"
-MODEL_VERSION = "2.20.1"
-LEARNING_VERSION = "2.20.1"
+REPORT_VERSION = "2.21.0"
+ANALYTICS_VERSION = "2.21.0"
+DATABASE_SCHEMA_VERSION = "2.21.0"
+MODEL_VERSION = "2.21.0"
+LEARNING_VERSION = "2.21.0"
 
 
 
@@ -1537,6 +1538,11 @@ def generate_learning_report_html() -> str:
         '<h3>Top 20 Historical Horse Performance</h3>',
         '<div class="note">Aggregated historical performance across distinct actual race starts. Repeated model-version snapshots for the same horse and race are counted once. The Trainer shown is from the latest completed recorded start. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.</div>',
         (_html_table(['Rank','Horse','Trainer','Status','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:20]]) if ((report.get('each_way_leaderboards') or {}).get('top_horses') or []) else '<div class="note">Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.</div>'),
+        '<h2>Historical Profile Intelligence — Punting Form</h2>',
+        '<div class="note">Independent of RRT Predictions. Horse profiles use /v2/form/form; trainer and jockey profiles use /v2/form/strikerate. RRT-observed leaderboards remain available separately.</div>',
+        '<h3>Top 20 Historical Horse Performance</h3>', (_html_table(['Rank','Horse','Trainer','Starts','Wins','Places','Win %','Place %','Last 10'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last10')] for i in ((report.get('historical_horses') or {}).get('horses') or [])]) if ((report.get('historical_horses') or {}).get('horses') or []) else '<div class="note">No Punting Form horse profiles cached yet. Run /api/profiles/refresh-meeting.</div>'),
+        '<h3>Top 20 Trainer Strike Rate — Last 100</h3>', (_html_table(['Rank','Trainer','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_trainers') or {}).get('profiles') or [])]) if ((report.get('historical_trainers') or {}).get('profiles') or []) else '<div class="note">No trainer strike-rate profiles cached yet.</div>'),
+        '<h3>Top 20 Jockey Strike Rate — Last 100</h3>', (_html_table(['Rank','Jockey','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_jockeys') or {}).get('profiles') or [])]) if ((report.get('historical_jockeys') or {}).get('profiles') or []) else '<div class="note">No jockey strike-rate profiles cached yet.</div>'),
         '<h2>Evidence-Based Factor Analysis</h2>',
         '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active v2.20.1 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
@@ -1653,6 +1659,16 @@ def generate_learning_report_pdf_bytes() -> bytes:
     else:
         story.append(Paragraph("Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.", styles["BodyText"]))
     story.append(PageBreak())
+    story.append(Paragraph("Historical Profile Intelligence — Punting Form", styles["RRTHeading"]))
+    story.append(Paragraph("Independent of RRT Predictions. Horse profiles use /v2/form/form; trainer and jockey profiles use /v2/form/strikerate.", styles["BodyText"]))
+    if (report.get("historical_horses") or {}).get("horses"):
+        story.append(t(["Rank","Horse","Trainer","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("horse"),i.get("trainer"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_horses") or {}).get("horses")]))
+    if (report.get("historical_trainers") or {}).get("profiles"):
+        story.append(Paragraph("Top 20 Trainer Strike Rate — Last 100", styles["RRTHeading"]))
+        story.append(t(["Rank","Trainer","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("entity_name"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_trainers") or {}).get("profiles")]))
+    if (report.get("historical_jockeys") or {}).get("profiles"):
+        story.append(Paragraph("Top 20 Jockey Strike Rate — Last 100", styles["RRTHeading"]))
+        story.append(t(["Rank","Jockey","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("entity_name"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_jockeys") or {}).get("profiles")]))
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
     story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active v2.20.1 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}

@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.20.1"
+SCHEMA_VERSION = "2.21.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -493,6 +493,14 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
         )
 
+
+        # v2.21.0 automatic historical profile cache.
+        execute_sql("""CREATE TABLE IF NOT EXISTS rrt_horse_profiles (id BIGSERIAL PRIMARY KEY,horse_id BIGINT,horse_key TEXT UNIQUE NOT NULL,horse_name TEXT NOT NULL,trainer TEXT,career_starts INTEGER DEFAULT 0,career_wins INTEGER DEFAULT 0,career_seconds INTEGER DEFAULT 0,career_thirds INTEGER DEFAULT 0,win_pct NUMERIC(7,2),place_pct NUMERIC(7,2),last10 TEXT,latest_run_date DATE,profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,source TEXT,refreshed_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ);""")
+        execute_sql("""CREATE TABLE IF NOT EXISTS rrt_horse_history (id BIGSERIAL PRIMARY KEY,horse_id BIGINT,horse_name TEXT NOT NULL,trainer TEXT,run_key TEXT UNIQUE NOT NULL,run_date DATE,track TEXT,distance_m INTEGER,position INTEGER,raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,source TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ DEFAULT NOW());""")
+        execute_sql("""CREATE TABLE IF NOT EXISTS rrt_entity_strike_rates (id BIGSERIAL PRIMARY KEY,entity_type TEXT NOT NULL,entity_id BIGINT,entity_key TEXT NOT NULL,entity_name TEXT NOT NULL,start_date DATE,career_starts INTEGER DEFAULT 0,career_wins INTEGER DEFAULT 0,career_seconds INTEGER DEFAULT 0,career_thirds INTEGER DEFAULT 0,career_expected_wins NUMERIC,career_pl NUMERIC,career_turnover NUMERIC,last100_starts INTEGER DEFAULT 0,last100_wins INTEGER DEFAULT 0,last100_seconds INTEGER DEFAULT 0,last100_thirds INTEGER DEFAULT 0,last100_expected_wins NUMERIC,last100_pl NUMERIC,last100_turnover NUMERIC,career_win_pct NUMERIC(7,2),career_place_pct NUMERIC(7,2),last100_win_pct NUMERIC(7,2),last100_place_pct NUMERIC(7,2),raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,source TEXT,refreshed_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ,UNIQUE(entity_type,entity_key));""")
+        execute_sql("""CREATE TABLE IF NOT EXISTS rrt_profile_refresh_runs (id BIGSERIAL PRIMARY KEY,refresh_id TEXT UNIQUE NOT NULL,meeting_id BIGINT,status TEXT NOT NULL,result_json JSONB NOT NULL DEFAULT '{}'::jsonb,started_at TIMESTAMPTZ DEFAULT NOW(),completed_at TIMESTAMPTZ);""")
+        execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_horse_history_identity ON rrt_horse_history(horse_id,horse_name,run_date DESC);")
+        execute_sql("CREATE INDEX IF NOT EXISTS ix_rrt_strike_rate_type ON rrt_entity_strike_rates(entity_type,refreshed_at DESC);")
         execute_sql(
             """
             INSERT INTO rrt_model_versions (version, description, active)
@@ -503,8 +511,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.20.1",
-                "RRT Predictor v2.20.1 Autonomous Model Promotion Controller in shadow mode with Simulator, Replay and rollback gates.",
+                "2.21.0",
+                "RRT Predictor v2.21.0 Historical Profile Intelligence and automatic Punting Form cache.",
                 True,
             ),
         )
@@ -533,6 +541,10 @@ def init_postgres_schema() -> Dict[str, Any]:
                 "rrt_runner_speed_profiles",
                 "rrt_speed_backfill_runs",
                 "rrt_speed_backfill_meetings",
+                "rrt_horse_profiles",
+                "rrt_horse_history",
+                "rrt_entity_strike_rates",
+                "rrt_profile_refresh_runs",
             ],
             "indexes": [
                 "ux_rrt_prediction_latest",
@@ -601,6 +613,9 @@ def get_database_summary() -> Dict[str, Any]:
         factor_recommendation_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_factor_recommendations;")
         weight_set_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_model_weight_sets;")
         candidate_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_model_candidates;")
+        horse_profile_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_horse_profiles;")
+        horse_history_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_horse_history;")
+        strike_profile_count = fetch_one("SELECT COUNT(*) AS count FROM rrt_entity_strike_rates;")
 
         averages = fetch_one(
             """
@@ -669,6 +684,9 @@ def get_database_summary() -> Dict[str, Any]:
                 "factor_recommendations": int((factor_recommendation_count or {}).get("count") or 0),
                 "model_weight_sets": int((weight_set_count or {}).get("count") or 0),
                 "model_candidates": int((candidate_count or {}).get("count") or 0),
+                "horse_profiles": int((horse_profile_count or {}).get("count") or 0),
+                "horse_history_rows": int((horse_history_count or {}).get("count") or 0),
+                "strike_rate_profiles": int((strike_profile_count or {}).get("count") or 0),
             },
             "averages": averages or {},
             "best_tracks": best_tracks,

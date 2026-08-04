@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 import time
 
 from database import fetch_one
+from profile_cache_engine import cache_profiles_from_form_data, enrich_form_data_with_cached_profiles, refresh_strike_rates
 
 from punting_form_client import (
     get_conditions,
@@ -18,8 +19,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.20.0"
-PREDICTION_TYPE = "RRT Predictor v2.20.0 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
+MODEL_VERSION = "2.21.0"
+PREDICTION_TYPE = "RRT Predictor v2.21.0 - Historical Profile Intelligence + Automatic Cache"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.14,
@@ -517,6 +518,9 @@ def build_factor_capture_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
         "speed_profile": runner.get("speed_profile"),
         "pf_ai": runner.get("pf_ai") or _rating_payload_from_runner(runner),
         "pf_ai_strategy": runner.get("pf_ai_strategy") or PF_AI_STRATEGY,
+        "historical_horse_profile": runner.get("historical_horse_profile"),
+        "historical_trainer_profile": runner.get("historical_trainer_profile"),
+        "historical_jockey_profile": runner.get("historical_jockey_profile"),
     }
 
 
@@ -630,6 +634,9 @@ def score_runner(
         "score_breakdown": score_breakdown,
         "weighted_breakdown": weighted_breakdown,
         "speed_profile": speed_profile,
+        "historical_horse_profile": runner.get("historical_horse_profile"),
+        "historical_trainer_profile": runner.get("historical_trainer_profile"),
+        "historical_jockey_profile": runner.get("historical_jockey_profile"),
         "factor_capture": {
             "runner_key": _runner_factor_key(runner, race),
             "raw_component_scores": score_breakdown,
@@ -1695,6 +1702,15 @@ def predict_meeting_from_punting_form(
     )
 
     form_data = simplify_form_response(raw_response)
+
+    # v2.21.0: persist raw Punting Form horse history and enrich runners from the
+    # automatic profile cache. Failure is non-fatal and never blocks predictions.
+    try:
+        cache_profiles_from_form_data(form_data, meeting_id=meeting_id)
+        refresh_strike_rates(meeting_id=meeting_id)
+        form_data = enrich_form_data_with_cached_profiles(form_data)
+    except Exception:
+        form_data = {**form_data, "profile_cache_merge": {"status": "unavailable", "prediction_continued": True}}
 
     meeting_metadata = fetch_meeting_metadata(
         meeting_id=meeting_id,
