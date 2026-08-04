@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.20.0"
-MODEL_VERSION = "2.20.0"
+SIMULATOR_VERSION = "2.20.0a"
+MODEL_VERSION = "2.20.0a"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -81,7 +81,6 @@ DEFAULT_SINGLE_FACTOR_SUITE = [
 
     {"factor": "weight", "change": -1.0, "label": "Weight -1"},
     {"factor": "weight", "change": -2.0, "label": "Weight -2"},
-    {"factor": "weight", "change": -3.0, "label": "Weight -3"},
 
     {"factor": "trainer", "change": -1.0, "label": "Trainer -1"},
     {"factor": "trainer", "change": -2.0, "label": "Trainer -2"},
@@ -179,7 +178,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -216,7 +215,7 @@ def _category_scores(item: Dict[str, Any]) -> Dict[str, float]:
     track=(_to_float(item.get("distance_record_score"),50)+_to_float(item.get("track_condition_score"),50))/2
     price=_to_float(item.get("market_price")); value=75 if 7<=price<=20 else 65 if 20<price<=40 else 50 if price>40 else 35
     return {"win_score":final,"each_way_score":round(final*.25+wp*.25+last*.18+speed*.12+track*.10+market*.10,2),
-            "roughie_score":round(final*.28+last*.18+speed*.16+wp*.14+_to_float(item.get("track_record_score"),50)*.09+value*.15,2)}
+            "value_index":round(final*.28+last*.18+speed*.16+wp*.14+_to_float(item.get("track_record_score"),50)*.09+value*.15,2)}
 
 
 def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, float], roughie_min_price: float=0.0, roughie_min_market_rank: int=0, roughie_min_score: float=0.0) -> Dict[str, Any]:
@@ -236,7 +235,7 @@ def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, floa
     # from ranks 5-20 using the dedicated roughie/value profile, without hard odds thresholds.
     top_20 = win_ranked[:20]
     roughie_pool = top_20[4:20]
-    roughies = sorted(roughie_pool, key=lambda x:_to_float(x.get("roughie_score")), reverse=True)[:4]
+    roughies = sorted(roughie_pool, key=lambda x:_to_float(x.get("value_index")), reverse=True)[:4]
     return {"top_20":top_20,"top_4_win":top_win,"top_4_each_way":each_way,"top_4_roughies":roughies}
 
 
@@ -267,12 +266,22 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
     each_way_total = 0
     roughie_hits = 0
     roughie_total = 0
+    winner_rank_bands = {"top_4": 0, "rank_5": 0, "ranks_6_8": 0, "ranks_9_12": 0, "ranks_13_20": 0, "outside_top_20": 0}
     for race_key, race_rows in grouped.items():
         evaluated = _evaluate_race_rows(race_rows, weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
         top1_hit = bool(evaluated["top_4_win"]) and evaluated["top_4_win"][0].get("actual_position") == 1
         win_hit = any(item.get("actual_position") == 1 for item in evaluated["top_4_win"])
         ew_hits = sum(1 for item in evaluated["top_4_each_way"] if item.get("actual_position") in [1,2,3])
         rough_hits = sum(1 for item in evaluated["top_4_roughies"] if item.get("actual_position") in [1,2,3,4])
+        winner = next((item for item in evaluated["top_20"] if _to_int(item.get("actual_position"), 999) == 1), None)
+        if winner is not None:
+            winner_rank = next((idx + 1 for idx, item in enumerate(evaluated["top_20"]) if _runner_identity(item) == _runner_identity(winner)), 999)
+            if winner_rank <= 4: winner_rank_bands["top_4"] += 1
+            elif winner_rank == 5: winner_rank_bands["rank_5"] += 1
+            elif winner_rank <= 8: winner_rank_bands["ranks_6_8"] += 1
+            elif winner_rank <= 12: winner_rank_bands["ranks_9_12"] += 1
+            elif winner_rank <= 20: winner_rank_bands["ranks_13_20"] += 1
+            else: winner_rank_bands["outside_top_20"] += 1
         top1_win_hits += 1 if top1_hit else 0
         top_win_hits += 1 if win_hit else 0
         each_way_hits += ew_hits
@@ -303,6 +312,7 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
         "race_count": race_count,
         "selection_totals": {"top1_win_total": race_count, "top1_win_hits": top1_win_hits, "top4_win_total": race_count, "top4_win_hits": top_win_hits, "each_way_total": each_way_total, "each_way_hits": each_way_hits, "roughie_total": roughie_total, "roughie_hits": roughie_hits},
         "metrics": {"top1_win_strike_rate": top1_rate, "top4_winner_coverage_rate": top_win_rate, "each_way_strike_rate": each_way_rate, "roughie_strike_rate": roughie_rate, "overall_accuracy": overall},
+        "winner_rank_bands": {k: {"count": v, "rate": round((v / race_count) * 100, 2) if race_count else 0.0} for k, v in winner_rank_bands.items()},
         "race_results_preview": race_results[:25],
     }
 
@@ -477,7 +487,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.20.0 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.20.0a analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
@@ -619,14 +629,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.20.0 distinct-selection and speed suite",
+                notes="v2.20.0a aligned Top 20 Value Index suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.20.0 distinct-selection and speed suite",
+                simulation_group="v2.20.0a aligned Top 20 Value Index suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -678,9 +688,10 @@ def run_default_simulation_suite(
             "analysis_only": True,
             "prediction_model_changed": False,
             "simulation_count": len(results),
+            "rank_band_framework": ["top_4", "rank_5", "ranks_6_8", "ranks_9_12", "ranks_13_20", "outside_top_20"],
             "memory_bounded": True,
             "dataset_loaded_once": True,
-            "roughie_selection_method": "ranks_5_to_8_outside_top4",
+            "roughie_selection_method": "value_ranked_from_meeting_ranks_5_to_20",
             "summary": {
                 "improved": len(improved),
                 "neutral": len(neutral),
@@ -706,10 +717,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the v2.19.5b rollback baseline with the active v2.20.0 weights."""
+    """Compare the v2.19.5b rollback baseline with the active v2.20.0a weights."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.20.0 production calibration",
+        simulation_name="v2.20.0a production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -717,7 +728,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.20.0 production calibration",
+        simulation_group="v2.20.0a production calibration",
     )
 
 

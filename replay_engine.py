@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.20.0"
-MODEL_VERSION = "2.20.0"
+REPLAY_VERSION = "2.20.0a"
+MODEL_VERSION = "2.20.0a"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -121,6 +121,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
     races = 0
     top1_hits = top4_win_hits = top4_place_hits = roughie_hits = 0
     roughie_races = 0
+    winner_rank_bands = {"top_4": 0, "rank_5": 0, "ranks_6_8": 0, "ranks_9_12": 0, "ranks_13_20": 0, "outside_top_20": 0}
     selections: List[Dict[str, Any]] = []
     for key, runners in groups.items():
         ranked = sorted(runners, key=lambda r: (_float(r.get(score_key)), -_float(r.get("market_price"))), reverse=True)
@@ -129,6 +130,14 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         races += 1
         top4 = ranked[:4]
         winner = next((r for r in runners if int(_float(r.get("actual_position"), 999)) == 1), None)
+        if winner is not None:
+            winner_rank = next((idx + 1 for idx, r in enumerate(ranked) if r.get("runner_key") == winner.get("runner_key")), 999)
+            if winner_rank <= 4: winner_rank_bands["top_4"] += 1
+            elif winner_rank == 5: winner_rank_bands["rank_5"] += 1
+            elif winner_rank <= 8: winner_rank_bands["ranks_6_8"] += 1
+            elif winner_rank <= 12: winner_rank_bands["ranks_9_12"] += 1
+            elif winner_rank <= 20: winner_rank_bands["ranks_13_20"] += 1
+            else: winner_rank_bands["outside_top_20"] += 1
         top1_hit = int(_float(ranked[0].get("actual_position"), 999)) == 1
         win_hit = winner is not None and winner.get("runner_key") in {r.get("runner_key") for r in top4}
         place_hit = any(1 <= int(_float(r.get("actual_position"), 999)) <= 3 for r in top4)
@@ -139,7 +148,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         for candidate in roughie_pool:
             price = _float(candidate.get("market_price"), 0.0)
             value = 75.0 if 7 <= price <= 20 else 65.0 if 20 < price <= 40 else 50.0 if price > 40 else 35.0
-            candidate["roughie_profile_score"] = (
+            candidate["value_index"] = (
                 _float(candidate.get(score_key), 50.0) * 0.28
                 + _float(candidate.get("last10_score"), 50.0) * 0.18
                 + _float(candidate.get("speed_score"), 50.0) * 0.16
@@ -147,7 +156,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
                 + _float(candidate.get("track_record_score"), 50.0) * 0.09
                 + value * 0.15
             )
-        roughies = sorted(roughie_pool, key=lambda r: _float(r.get("roughie_profile_score")), reverse=True)[:4]
+        roughies = sorted(roughie_pool, key=lambda r: _float(r.get("value_index")), reverse=True)[:4]
         roughie_hit = False
         if roughies:
             roughie_races += 1
@@ -166,12 +175,14 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         "top4_win_hits": top4_win_hits, "top4_win_strike_rate": pct(top4_win_hits, races),
         "top4_place_hits": top4_place_hits, "top4_place_strike_rate": pct(top4_place_hits, races),
         "roughie_eligible_races": roughie_races, "roughie_win_hits": roughie_hits,
-        "roughie_win_strike_rate": pct(roughie_hits, roughie_races), "selections": selections,
+        "roughie_win_strike_rate": pct(roughie_hits, roughie_races),
+        "winner_rank_bands": {k: {"count": v, "rate": pct(v, races)} for k, v in winner_rank_bands.items()},
+        "selections": selections,
     }
 
 
 def run_historical_replay(
-    replay_name: str = "v2.20.0 production-versus-candidate replay",
+    replay_name: str = "v2.20.0a production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -201,7 +212,7 @@ def run_historical_replay(
         result = {
             "success": True, "provider": "PostgreSQL", "replay_version": REPLAY_VERSION,
             "replay_id": replay_id, "replay_name": replay_name, "analysis_only": True,
-            "production_weights_changed": False, "model_version": model_version,
+            "production_weights_changed": False, "model_version": model_version or MODEL_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "dataset": {"runner_count": len(rows), "race_count": len(groups), "meeting_count": len({r.get('meeting_id') for r in rows}),
                         "min_meeting_date": min((r.get("meeting_date") for r in rows if r.get("meeting_date") is not None), default=None),
@@ -223,7 +234,7 @@ def run_historical_replay(
                  dataset_runner_count, dataset_race_count, dataset_meeting_count, current_weights_json,
                  replay_weights_json, current_metrics_json, replay_metrics_json, improvement_json, replay_json)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
-                (replay_id, replay_name, REPLAY_VERSION, model_version, result["dataset"].get("min_meeting_date"), result["dataset"].get("max_meeting_date"),
+                (replay_id, replay_name, REPLAY_VERSION, model_version or MODEL_VERSION, result["dataset"].get("min_meeting_date"), result["dataset"].get("max_meeting_date"),
                  len(rows), len(groups), len({r.get('meeting_id') for r in rows}), json.dumps(current_weights),
                  json.dumps(weights), json.dumps(result["current_metrics"]), json.dumps(result["replay_metrics"]),
                  json.dumps(improvement), json.dumps(result, default=str)),

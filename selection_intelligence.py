@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.20.0"
-MODEL_VERSION = "2.20.0"
+SELECTION_INTELLIGENCE_VERSION = "2.20.0a"
+MODEL_VERSION = "2.20.0a"
 
 
 FACTOR_COLUMNS = [
@@ -56,7 +56,7 @@ def _load_completed_rows(
         "actual_position IS NOT NULL",
         "meeting_id IS NOT NULL",
         "race_number IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a')",
     ]
     params: List[Any] = []
 
@@ -298,7 +298,7 @@ def _build_selection_recommendations(
             "area": "Top 4 Boundary",
             "recommendation": "Test controlled promotion rules within the Top 20, prioritising runners ranked 5th to 8th where factor evidence is strong.",
             "evidence": f"{near_miss_count} races had winners ranked 5th to 8th.",
-            "next_step": "v2.20.0 should simulate controlled Top 20 promotion rules before production use.",
+            "next_step": "Use the v2.20.0a aligned simulator to validate controlled Top 20 promotion rules before any production change.",
         })
 
     if boundary_rate >= 0.04:
@@ -314,9 +314,9 @@ def _build_selection_recommendations(
         recommendations.append({
             "priority": "High",
             "area": "Value / Roughie Logic",
-            "recommendation": "Introduce a value index to detect higher-priced winners that the model rates competitively.",
+            "recommendation": "Calibrate the existing Value Index to improve detection of higher-priced winners that the model rates competitively.",
             "evidence": f"{roughie_like_winner_count} winners had roughie-like market characteristics.",
-            "next_step": "Simulate value-index based roughie and each-way promotion rules.",
+            "next_step": "Validate the existing Value Index across rank bands using aligned Simulator and Replay evidence.",
         })
 
     if false_positive_rate >= 1.5:
@@ -336,7 +336,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} should influence selection promotion more strongly.",
                 "evidence": f"Missed winners averaged {avg_gap} points stronger than Top 4 selections on this factor.",
-                "next_step": "Use v2.20.0 promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
+                "next_step": "Use v2.20.0a promotion-gate simulation to test a rule-based promotion rather than direct production weight change.",
             })
         elif avg_gap <= -3:
             recommendations.append({
@@ -344,7 +344,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} is suppressing winners or over-rewarding false positives.",
                 "evidence": f"Missed winners averaged {avg_gap} points weaker than Top 4 selections on this factor.",
-                "next_step": "Use v2.20.0 promotion-gate simulation to test controlled reduction or gating rules.",
+                "next_step": "Use v2.20.0a promotion-gate simulation to test controlled reduction or gating rules.",
             })
 
     if not recommendations:
@@ -353,7 +353,7 @@ def _build_selection_recommendations(
             "area": "Selection Stability",
             "recommendation": "No dominant selection miss pattern was found. Continue collecting data and focus on value-index testing.",
             "evidence": "Misses are distributed across several factors rather than one clear driver.",
-            "next_step": "Continue collecting native full-field results and review again after additional v2.20.0 native results.",
+            "next_step": "Continue collecting native full-field results and review again after additional v2.20.0a native results.",
         })
 
     return recommendations
@@ -384,6 +384,24 @@ def run_selection_intelligence_analysis(
         roughie_candidate_winner_count = sum(1 for item in race_analyses if item.get("roughie_candidate_winner"))
         roughie_like_winner_count = sum(1 for item in race_analyses if item.get("roughie_like_winner"))
         false_positive_total = sum(_to_int(item.get("false_positive_count")) for item in race_analyses)
+        rank_band_counts = {"top_4": 0, "rank_5": 0, "ranks_6_8": 0, "ranks_9_12": 0, "ranks_13_20": 0, "outside_top_20": 0}
+        value_index_eligible = 0
+        value_index_winners = 0
+        promotion_opportunities = 0
+        for item in race_analyses:
+            rank = _to_int((item.get("winner") or {}).get("rrt_rank"), 999)
+            if rank <= 4: rank_band_counts["top_4"] += 1
+            elif rank == 5: rank_band_counts["rank_5"] += 1
+            elif rank <= 8: rank_band_counts["ranks_6_8"] += 1
+            elif rank <= 12: rank_band_counts["ranks_9_12"] += 1
+            elif rank <= 20: rank_band_counts["ranks_13_20"] += 1
+            else: rank_band_counts["outside_top_20"] += 1
+            if 5 <= rank <= 20:
+                value_index_eligible += 1
+                if item.get("roughie_like_winner"): value_index_winners += 1
+            if rank == 5 and abs(_to_float(item.get("score_gap_to_top4_floor"))) <= 1.0:
+                promotion_opportunities += 1
+        rank_band_distribution = {k: {"count": v, "rate": round((v / race_count) * 100, 2) if race_count else 0.0} for k, v in rank_band_counts.items()}
         missed_races = [item for item in race_analyses if not item.get("top4_hit")]
         top_misses = sorted(
             missed_races,
@@ -435,6 +453,10 @@ def run_selection_intelligence_analysis(
                 "roughie_like_winner_rate": round((roughie_like_winner_count / race_count) * 100, 2) if race_count else 0.0,
                 "false_positive_total": false_positive_total,
                 "avg_false_positives_per_race": round(false_positive_total / race_count, 2) if race_count else 0.0,
+                "rank_band_distribution": rank_band_distribution,
+                "rank5_sensitivity": {"boundary_winners": boundary_miss_count, "within_one_point_of_top4_floor": promotion_opportunities, "opportunity_rate": round((promotion_opportunities / race_count) * 100, 2) if race_count else 0.0},
+                "promotion_opportunity_score": round((promotion_opportunities / max(boundary_miss_count, 1)) * 100, 2),
+                "value_index_effectiveness": {"eligible_winners_ranks_5_20": value_index_eligible, "roughie_like_winners": value_index_winners, "roughie_like_share": round((value_index_winners / max(value_index_eligible, 1)) * 100, 2)},
             },
             "factor_gap_rollup": factor_gap_rollup,
             "recommendations": recommendations,
@@ -513,7 +535,7 @@ def get_latest_selection_analysis() -> Dict[str, Any]:
             SELECT MAX(updated_at) AS latest_completed_at
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
-              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0');
+              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a');
         """) or {}
         if (not row) or (latest_native.get("latest_completed_at") and row.get("generated_at") and row.get("generated_at") < latest_native.get("latest_completed_at")):
             return run_selection_intelligence_analysis(save_result=True)
@@ -585,6 +607,9 @@ def get_category_analysis() -> Dict[str, Any]:
                 "roughie_like_winner_count": summary.get("roughie_like_winner_count"),
                 "roughie_like_winner_rate": summary.get("roughie_like_winner_rate"),
             },
+            "rank_bands": summary.get("rank_band_distribution"),
+            "rank5_sensitivity": summary.get("rank5_sensitivity"),
+            "value_index_effectiveness": summary.get("value_index_effectiveness"),
             "false_positives": {
                 "false_positive_total": summary.get("false_positive_total"),
                 "avg_false_positives_per_race": summary.get("avg_false_positives_per_race"),

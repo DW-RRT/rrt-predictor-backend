@@ -12,12 +12,25 @@ from simulator_engine import get_best_simulations, get_simulation_history
 from selection_intelligence import get_latest_selection_analysis
 
 
-REPORT_VERSION = "2.20.0"
-ANALYTICS_VERSION = "2.20.0"
-DATABASE_SCHEMA_VERSION = "2.20.0"
-MODEL_VERSION = "2.20.0"
-LEARNING_VERSION = "2.20.0"
+REPORT_VERSION = "2.20.0a"
+ANALYTICS_VERSION = "2.20.0a"
+DATABASE_SCHEMA_VERSION = "2.20.0a"
+MODEL_VERSION = "2.20.0a"
+LEARNING_VERSION = "2.20.0a"
 
+
+
+
+def _align_analysis_metadata(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Align nested legacy analysis metadata without changing calculations."""
+    if not isinstance(report, dict):
+        return report
+    aligned = dict(report)
+    aligned["analysis_version"] = REPORT_VERSION
+    aligned["model_version"] = MODEL_VERSION
+    aligned["analysis_only"] = True
+    aligned["prediction_model_changed"] = False
+    return aligned
 
 # ---------------------------------------------------------------------
 # Shared helpers
@@ -1169,7 +1182,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_historical_performance_leaderboards",
-            "leaderboard_version": "2.20.0",
+            "leaderboard_version": "2.20.0a",
             "generated_at": _now_utc_iso(),
             "minimum_samples": {
                 "trainers": max(int(min_runners), MIN_TRAINER_RUNNERS),
@@ -1191,7 +1204,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_historical_performance_leaderboards",
-            "leaderboard_version": "2.20.0",
+            "leaderboard_version": "2.20.0a",
             "error": str(error),
         }
 
@@ -1201,7 +1214,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
         base = _learning_base()
         tracks = _learning_tracks()
         dates = _learning_dates()
-        factor_effectiveness = get_factor_effectiveness_report()
+        factor_effectiveness = _align_analysis_metadata(get_factor_effectiveness_report())
         best_simulations = get_best_simulations(limit=10)
         speed_calibration = _extract_speed_calibration(factor_effectiveness, best_simulations)
         weight_recommendations = _apply_speed_report_override(get_weight_recommendations(), speed_calibration)
@@ -1229,7 +1242,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "best_simulations": best_simulations,
             "selection_intelligence": get_latest_selection_analysis(),
             "speed_calibration": speed_calibration,
-            "safety_note": "This report reflects the active v2.20.0 production weights, including Normalised Speed at 10%. Automatic weight changes are disabled. All future adaptive recommendations remain analysis-only proposals until manually reviewed and approved.",
+            "safety_note": "This report reflects the active v2.20.0a production weights, including Normalised Speed at 10%. Automatic weight changes are disabled. All future adaptive recommendations remain analysis-only proposals until manually reviewed and approved.",
         }
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION, "report": "learning_recommendations", "error": str(error)}
@@ -1283,8 +1296,8 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
         "production_weight": 10.0,
         "tested_range": f"{min(tested_weights):g}% to {max(tested_weights):g}%" if tested_weights else "Not available",
         "leading_candidate_weight": leading.get("new_weight"),
-        "recommended_calibration_range": "Active at 10%; monitor new v2.20.0 results",
-        "production_status": "Active at 10% in v2.20.0; monitor live out-of-sample performance before any further change.",
+        "recommended_calibration_range": "Active at 10%; monitor new v2.20.0a results",
+        "production_status": "Active at 10% in v2.20.0a; monitor live out-of-sample performance before any further change.",
         "automatic_weight_changes_enabled": False,
         "simulations": speed_simulations,
     }
@@ -1302,7 +1315,7 @@ def _apply_speed_report_override(weight_recommendations: Dict[str, Any], speed_c
                 "change": "0",
                 "direction": "Production Monitoring",
                 "priority": "High",
-                "reason": f"Ranked #{speed_calibration.get('predictive_rank')} with a {speed_calibration.get('signal_strength')} signal and High confidence. The historically leading 10% simulator candidate is active in v2.20.0; hold and monitor new out-of-sample results.",
+                "reason": f"Ranked #{speed_calibration.get('predictive_rank')} with a {speed_calibration.get('signal_strength')} signal and High confidence. The historically leading 10% simulator candidate is active in v2.20.0a; hold and monitor new out-of-sample results.",
             })
         updated.append(item)
     return {**weight_recommendations, "recommendations": updated, "analysis_only": True, "prediction_model_changed": False, "automatic_weight_changes_enabled": False}
@@ -1316,8 +1329,8 @@ def get_speed_rating_report() -> Dict[str, Any]:
             ROUND(AVG(speed_score) FILTER(WHERE actual_position BETWEEN 1 AND 3),2) AS placed_average,
             ROUND(AVG(speed_score) FILTER(WHERE actual_position>3),2) AS unplaced_average,COUNT(*) FILTER(WHERE speed_score IS NOT NULL) AS analysed_rows
             FROM rrt_runner_factor_snapshots WHERE actual_position IS NOT NULL;""") or {}
-        return {"success":True,"speed_version":"2.20.0","analysis_only":True,"totals":totals,"outcome":outcome,"in_run_used":False}
-    except Exception as e: return {"success":False,"speed_version":"2.20.0","error":str(e)}
+        return {"success":True,"speed_version":"2.20.0a","analysis_only":True,"totals":totals,"outcome":outcome,"in_run_used":False}
+    except Exception as e: return {"success":False,"speed_version":"2.20.0a","error":str(e)}
 
 
 def generate_learning_report_html() -> str:
@@ -1359,7 +1372,7 @@ def generate_learning_report_html() -> str:
         '<h3>Top 10 Trainer / Jockey Combinations</h3>', _html_table(['Rank','Combination','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('trainer_jockey_combination'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_trainer_jockey_combinations') or [])[:10]]),
         '<h3>Emerging Historical Horse Performance</h3>', (_html_table(['Rank','Horse','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:10]]) if ((report.get('each_way_leaderboards') or {}).get('top_horses') or []) else '<div class="note">Insufficient historical horse performance data available. A minimum of five completed runs is required before inclusion.</div>'),
         '<h2>Evidence-Based Factor Analysis</h2>',
-        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active v2.20.0 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.</div>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active v2.20.0a production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
         _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:13]]),
         '<h3>Future Adaptive Weight Proposals</h3>',
@@ -1370,7 +1383,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">Selection Intelligence v2.20.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
+        '<div class="note">Selection Intelligence v2.20.0a analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1383,7 +1396,7 @@ def generate_learning_report_html() -> str:
             for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
         ]),
         '<h2>Normalised Speed Rating</h2>',
-        '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight is active at 10% in v2.20.0 while live monitoring continues.</p>',
+        '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight is active at 10% in v2.20.0a while live monitoring continues.</p>',
         _html_table(['Metric','Value'], [
             ['Predictive Rank', f"#{(report.get('speed_calibration') or {}).get('predictive_rank')}"],
             ['Signal / Confidence', f"{(report.get('speed_calibration') or {}).get('signal_strength')} / {(report.get('speed_calibration') or {}).get('confidence')}"],
@@ -1470,7 +1483,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
         story.append(Paragraph("Insufficient historical horse performance data available. A minimum of five completed runs is required before inclusion.", styles["BodyText"]))
     story.append(PageBreak())
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
-    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active v2.20.0 production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.", styles["BodyText"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active v2.20.0a production weights. Automatic weight changes are disabled, and all future proposals remain inactive until manually reviewed and approved.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}
