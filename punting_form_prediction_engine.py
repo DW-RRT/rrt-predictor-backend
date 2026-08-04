@@ -18,8 +18,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.19.6"
-PREDICTION_TYPE = "RRT Predictor v2.19.6 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
+MODEL_VERSION = "2.20.0"
+PREDICTION_TYPE = "RRT Predictor v2.20.0 - Distinct Win, Each-Way and Roughie Scores + Normalised Speed Rating"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.14,
@@ -37,7 +37,7 @@ SCORING_WEIGHTS = {
     "speed_rating": 0.10,
 }
 
-_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.19.6"}
+_WEIGHT_CACHE = {"loaded_at": 0.0, "weights": None, "weight_set_version": "2.20.0"}
 
 def refresh_active_scoring_weights(force: bool = False) -> Dict[str, float]:
     """Load the active production weight set from PostgreSQL with a short cache."""
@@ -430,6 +430,24 @@ def score_roughie_profile(runner: Dict[str, Any]) -> float:
         safe_float(b.get("track_record"))*0.09 + value*0.15),2)
 
 
+def score_value_index(runner: Dict[str, Any]) -> float:
+    """Rank value opportunities inside the meeting Top 20 without changing base production weights."""
+    breakdown = runner.get("score_breakdown") or {}
+    price = safe_float(runner.get("price"), 0.0)
+    market_overlay = 80.0 if 8 <= price <= 20 else 72.0 if 20 < price <= 40 else 58.0 if price > 40 else 42.0
+    speed_profile = runner.get("speed_profile") or {}
+    speed_trend = safe_float(breakdown.get("speed_rating"), 50.0)
+    if safe_int(speed_profile.get("completed_runs"), 0) >= 3:
+        speed_trend = clamp(speed_trend + max(-10.0, min(10.0, safe_float(speed_profile.get("avg_last3"), 50.0) - safe_float(speed_profile.get("avg_last5"), 50.0))))
+    return round(clamp(
+        safe_float(runner.get("roughie_score"), 50.0) * 0.35
+        + market_overlay * 0.25
+        + speed_trend * 0.20
+        + safe_float(breakdown.get("last10_form"), 50.0) * 0.12
+        + safe_float(breakdown.get("track_condition_record"), 50.0) * 0.08
+    ), 2)
+
+
 def select_each_way_distinct(all_ranked: List[Dict[str, Any]], top_win: List[Dict[str, Any]], limit: int=4, max_overlap: int=2) -> List[Dict[str, Any]]:
     win_keys={r.get("runner_key") for r in top_win}; ranked=sorted(all_ranked,key=lambda r:r.get("each_way_score",0),reverse=True)
     selected=[r for r in ranked if r.get("runner_key") not in win_keys][:max(0,limit-max_overlap)]
@@ -489,6 +507,8 @@ def build_factor_capture_runner(runner: Dict[str, Any]) -> Dict[str, Any]:
         "win_score": runner.get("win_score"),
         "each_way_score": runner.get("each_way_score"),
         "roughie_score": runner.get("roughie_score"),
+        "value_index": runner.get("value_index"),
+        "top_20_eligible": runner.get("top_20_eligible"),
         "confidence": runner.get("confidence"),
         "score_breakdown": runner.get("score_breakdown"),
         "weighted_breakdown": runner.get("weighted_breakdown"),
@@ -697,6 +717,8 @@ def format_runner(runner: Dict[str, Any], category: str = "standard") -> Dict[st
         "win_score": runner.get("win_score"),
         "each_way_score": runner.get("each_way_score"),
         "roughie_score": runner.get("roughie_score"),
+        "value_index": runner.get("value_index"),
+        "top_20_eligible": runner.get("top_20_eligible"),
         "confidence": runner.get("confidence"),
 
         "race_id": runner.get("race_id"),
@@ -1526,7 +1548,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.19.6",
+                "version": "2.20.0",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1534,14 +1556,26 @@ def predict_from_form_data(
             },
         }
 
+    top_20_ranked = all_ranked[:20]
     for runner in all_ranked:
         runner["win_score"] = safe_float(runner.get("score"))
         runner["each_way_score"] = score_each_way_profile(runner)
         runner["roughie_score"] = score_roughie_profile(runner)
+        runner["top_20_eligible"] = safe_int(runner.get("meeting_rank"), 999) <= 20
+        runner["value_index"] = score_value_index(runner)
     top_4_win = sorted(all_ranked, key=lambda r:r.get("win_score",0), reverse=True)[:4]
-    top_4_each_way = select_each_way_distinct(all_ranked, top_4_win, limit=4, max_overlap=2)
+    top_4_each_way = select_each_way_distinct(top_20_ranked, top_4_win, limit=4, max_overlap=2)
     excluded_selection_keys = {r.get("runner_key") for r in top_4_win + top_4_each_way}
-    top_4_roughies = [r for r in sorted(all_ranked,key=lambda r:r.get("roughie_score",0),reverse=True) if r.get("runner_key") not in excluded_selection_keys][:4]
+    roughie_candidate_pool = [
+        r for r in top_20_ranked
+        if 5 <= safe_int(r.get("meeting_rank"), 999) <= 20
+        and r.get("runner_key") not in excluded_selection_keys
+    ]
+    top_4_roughies = sorted(
+        roughie_candidate_pool,
+        key=lambda r: (safe_float(r.get("value_index")), safe_float(r.get("roughie_score"))),
+        reverse=True,
+    )[:4]
 
     multis = build_multis(eligible_races)
 
@@ -1611,12 +1645,12 @@ def predict_from_form_data(
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
                 "PF AI ratings are merged for comparison only and are not yet used in scoring. "
-                "Roughies are the next four ranked runners (positions 5-8) outside the Top 4, with no odds, confidence or score threshold. "
+                "A single meeting Top 20 ranking feeds Win, Each-Way and Roughie categories. Roughies are value-ranked opportunities drawn only from meeting ranks 5-20, with no hard odds threshold. "
                 "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
         },
         "factor_capture": {
-            "version": "2.19.6",
+            "version": "2.20.0",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
@@ -1624,6 +1658,11 @@ def predict_from_form_data(
             "runners": [build_factor_capture_runner(runner) for runner in all_ranked],
         },
         "predictions": {
+            "top_20_ranked_horses": [
+                format_runner(runner)
+                for runner in top_20_ranked
+            ],
+            "roughie_candidate_range": {"minimum_rank": 5, "maximum_rank": 20, "method": "value_index"},
             "top_4_win_bets": [
                 format_runner(runner)
                 for runner in top_4_win

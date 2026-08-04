@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.19.5b"
-MODEL_VERSION = "2.19.5b"
+REPLAY_VERSION = "2.20.0"
+MODEL_VERSION = "2.20.0"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -133,8 +133,21 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         win_hit = winner is not None and winner.get("runner_key") in {r.get("runner_key") for r in top4}
         place_hit = any(1 <= int(_float(r.get("actual_position"), 999)) <= 3 for r in top4)
         top1_hits += int(top1_hit); top4_win_hits += int(win_hit); top4_place_hits += int(place_hit)
-        # Production-aligned roughies: ranks 5-8 outside the Top 4, with no thresholds.
-        roughies = ranked[4:8]
+        # v2.20.0: shortlist ranks 5-20, then use a distinct roughie/value profile.
+        top_20 = ranked[:20]
+        roughie_pool = top_20[4:20]
+        for candidate in roughie_pool:
+            price = _float(candidate.get("market_price"), 0.0)
+            value = 75.0 if 7 <= price <= 20 else 65.0 if 20 < price <= 40 else 50.0 if price > 40 else 35.0
+            candidate["roughie_profile_score"] = (
+                _float(candidate.get(score_key), 50.0) * 0.28
+                + _float(candidate.get("last10_score"), 50.0) * 0.18
+                + _float(candidate.get("speed_score"), 50.0) * 0.16
+                + _float(candidate.get("win_place_score"), 50.0) * 0.14
+                + _float(candidate.get("track_record_score"), 50.0) * 0.09
+                + value * 0.15
+            )
+        roughies = sorted(roughie_pool, key=lambda r: _float(r.get("roughie_profile_score")), reverse=True)[:4]
         roughie_hit = False
         if roughies:
             roughie_races += 1
@@ -158,7 +171,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.19.5b production-versus-candidate replay",
+    replay_name: str = "v2.20.0 production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -194,7 +207,7 @@ def run_historical_replay(
                         "min_meeting_date": min((r.get("meeting_date") for r in rows if r.get("meeting_date") is not None), default=None),
                         "max_meeting_date": max((r.get("meeting_date") for r in rows if r.get("meeting_date") is not None), default=None)},
             "production_weights": current_weights, "candidate_weights": weights,
-            "roughie_rules": {"method": "ranks_5_to_8_outside_top4", "thresholds_applied": False},
+            "roughie_rules": {"method": "value_ranked_from_meeting_ranks_5_to_20", "thresholds_applied": False, "top_20_framework": True},
             "current_metrics": {k: v for k, v in current.items() if k != "selections"},
             "replay_metrics": {k: v for k, v in replay.items() if k != "selections"},
             "improvement": improvement,

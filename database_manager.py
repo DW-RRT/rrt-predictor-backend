@@ -4,7 +4,7 @@ import json
 from database import execute_sql, fetch_all, fetch_one, postgres_status
 
 
-SCHEMA_VERSION = "2.19.6"
+SCHEMA_VERSION = "2.20.0"
 
 
 def init_postgres_schema() -> Dict[str, Any]:
@@ -115,6 +115,11 @@ def init_postgres_schema() -> Dict[str, Any]:
                 confidence NUMERIC(6,2),
                 market_price NUMERIC(10,2),
                 market_rank INTEGER,
+                meeting_rank INTEGER,
+                win_score NUMERIC(8,2),
+                each_way_score NUMERIC(8,2),
+                roughie_score NUMERIC(8,2),
+                value_index NUMERIC(8,2),
                 last10_score NUMERIC(6,2),
                 win_place_score NUMERIC(6,2),
                 track_record_score NUMERIC(6,2),
@@ -153,6 +158,11 @@ def init_postgres_schema() -> Dict[str, Any]:
         )
 
         execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS speed_score NUMERIC(6,2);")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS meeting_rank INTEGER;")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS win_score NUMERIC(8,2);")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS each_way_score NUMERIC(8,2);")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS roughie_score NUMERIC(8,2);")
+        execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS value_index NUMERIC(8,2);")
         execute_sql("ALTER TABLE rrt_runner_factor_snapshots ADD COLUMN IF NOT EXISTS weighted_speed NUMERIC(8,4);")
 
         execute_sql(
@@ -370,7 +380,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             """
             UPDATE rrt_model_weight_sets
             SET status = 'Rollback'
-            WHERE status = 'Active' AND model_version <> '2.19.6';
+            WHERE status = 'Active' AND model_version <> '2.20.0';
             """
         )
         execute_sql(
@@ -380,7 +390,8 @@ def init_postgres_schema() -> Dict[str, Any]:
             VALUES
               ('2.18.4','Archive',%s::jsonb,'RRT Predictor','Earlier calibrated production baseline.',NULL,FALSE),
               ('2.19.5b','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.19.6 Speed activation.',NULL,FALSE),
-              ('2.19.6','Active',%s::jsonb,'RRT Predictor','Normalised Speed active at 10%%; all factor weights rebalanced to 100%%. Automatic promotion remains disabled.',NOW(),FALSE)
+              ('2.19.6','Rollback',%s::jsonb,'RRT Predictor','Immediate rollback baseline before v2.20.0 Intelligent Ranking Engine.',NULL,FALSE),
+              ('2.20.0','Active',%s::jsonb,'RRT Predictor','Intelligent Ranking Engine: shared Top 20 meeting ranking, distinct Each-Way profiles and value-index Roughies from ranks 5-20. Production factor weights unchanged.',NOW(),FALSE)
             ON CONFLICT (model_version) DO UPDATE SET
               status=EXCLUDED.status,
               weights_json=EXCLUDED.weights_json,
@@ -392,6 +403,7 @@ def init_postgres_schema() -> Dict[str, Any]:
             (
                 json.dumps({'last10': 15, 'win_place': 9, 'track_record': 8, 'distance_record': 8, 'track_distance': 8, 'track_condition': 8, 'trainer': 7, 'jockey': 7, 'trainer_jockey': 9, 'barrier': 4, 'weight': 3, 'market': 14, 'speed': 0}),
                 json.dumps({'last10': 15, 'win_place': 9, 'track_record': 8, 'distance_record': 8, 'track_distance': 8, 'track_condition': 8, 'trainer': 7, 'jockey': 7, 'trainer_jockey': 9, 'barrier': 4, 'weight': 3, 'market': 14, 'speed': 0}),
+                json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),
                 json.dumps({'last10': 14, 'win_place': 8, 'track_record': 7, 'distance_record': 7, 'track_distance': 7, 'track_condition': 7, 'trainer': 6, 'jockey': 6, 'trainer_jockey': 8, 'barrier': 4, 'weight': 2, 'market': 14, 'speed': 10}),
             ),
         )
@@ -469,8 +481,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.19.6",
-                "RRT Predictor v2.19.6 production activation of Normalised Speed at 10% with rebalanced 100% factor weights.",
+                "2.20.0",
+                "RRT Predictor v2.20.0 Intelligent Ranking Engine with shared Top 20 meeting rankings and value-index Roughies from ranks 5-20.",
                 True,
             ),
         )
@@ -753,7 +765,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
 
 def load_prediction_snapshot(
     meeting_id: int,
-    model_version: str = "2.19.6",
+    model_version: str = "2.20.0",
 ) -> Dict[str, Any]:
     try:
         row = fetch_one(
@@ -1105,6 +1117,7 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     confidence,
                     market_price,
                     market_rank,
+                    meeting_rank, win_score, each_way_score, roughie_score, value_index,
                     last10_score,
                     win_place_score,
                     track_record_score,
@@ -1135,7 +1148,8 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s::jsonb
                 )
                 ON CONFLICT (meeting_id, model_version, runner_key)
                 DO UPDATE SET
@@ -1150,6 +1164,11 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     confidence = EXCLUDED.confidence,
                     market_price = EXCLUDED.market_price,
                     market_rank = EXCLUDED.market_rank,
+                    meeting_rank = EXCLUDED.meeting_rank,
+                    win_score = EXCLUDED.win_score,
+                    each_way_score = EXCLUDED.each_way_score,
+                    roughie_score = EXCLUDED.roughie_score,
+                    value_index = EXCLUDED.value_index,
                     last10_score = EXCLUDED.last10_score,
                     win_place_score = EXCLUDED.win_place_score,
                     track_record_score = EXCLUDED.track_record_score,
@@ -1194,6 +1213,11 @@ def save_runner_factor_snapshots(prediction_snapshot: Dict[str, Any]) -> Dict[st
                     runner.get("confidence"),
                     runner.get("price"),
                     runner.get("market_rank"),
+                    runner.get("meeting_rank"),
+                    runner.get("win_score"),
+                    runner.get("each_way_score"),
+                    runner.get("roughie_score"),
+                    runner.get("value_index"),
                     breakdown.get("last10_form"),
                     breakdown.get("win_place"),
                     breakdown.get("track_record"),
@@ -1457,9 +1481,9 @@ def save_speed_ratings_from_results(results_snapshot: Dict[str, Any]) -> Dict[st
                 best_speed_score=EXCLUDED.best_speed_score,speed_consistency=EXCLUDED.speed_consistency,
                 latest_run_date=EXCLUDED.latest_run_date,updated_at=NOW();""",
                 (runner_id,rows[0].get("runner_name"),len(scores),scores[0],round(avg3,2),round(avg5,2),max(scores),round(consistency,2),rows[0].get("meeting_date")))
-        return {"success":True,"provider":"PostgreSQL","speed_version":"2.19.6","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
+        return {"success":True,"provider":"PostgreSQL","speed_version":"2.20.0","meeting_id":meeting_id,"saved_runner_times":saved,"updated_profiles":len(runners_seen),"in_run_used":False}
     except Exception as error:
-        return {"success":False,"provider":"PostgreSQL","speed_version":"2.19.6","error":str(error)}
+        return {"success":False,"provider":"PostgreSQL","speed_version":"2.20.0","error":str(error)}
 
 
 def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
@@ -1577,7 +1601,7 @@ def backfill_speed_ratings_from_saved_results(limit: int = 5) -> Dict[str, Any]:
     response = {
         "success": not failures,
         "provider": "PostgreSQL",
-        "speed_version": "2.19.6",
+        "speed_version": "2.20.0",
         "batch_id": batch_id,
         "status": status,
         "meeting_limit": meeting_limit,
@@ -1675,7 +1699,7 @@ def integrate_speed_ratings_into_factor_snapshots() -> Dict[str, Any]:
                               to_jsonb(enriched.pre_race_speed_score), true),
                     '{speed_integration}',
                     jsonb_build_object(
-                        'version', '2.19.6',
+                        'version', '2.20.0',
                         'method', 'pre_race_official_time_history',
                         'prior_runs_used', enriched.prior_run_count,
                         'leakage_safe', true,
@@ -1702,7 +1726,7 @@ def integrate_speed_ratings_into_factor_snapshots() -> Dict[str, Any]:
         return {
             "success": True,
             "provider": "PostgreSQL",
-            "speed_version": "2.19.6",
+            "speed_version": "2.20.0",
             "analysis_only": True,
             "prediction_model_changed": False,
             "production_speed_weight": 0,
@@ -1721,7 +1745,7 @@ def integrate_speed_ratings_into_factor_snapshots() -> Dict[str, Any]:
         return {
             "success": False,
             "provider": "PostgreSQL",
-            "speed_version": "2.19.6",
+            "speed_version": "2.20.0",
             "analysis_only": True,
             "error": str(error),
         }
@@ -1746,7 +1770,7 @@ def get_speed_rating_summary() -> Dict[str, Any]:
         ROUND(AVG(speed_score) FILTER (WHERE actual_position IS NOT NULL AND speed_score IS NOT NULL),2) AS avg_pre_race_speed_score
         FROM rrt_runner_factor_snapshots;""") or {}
     remaining = int(pending.get("count") or 0)
-    return {"success":True,"speed_version":"2.19.6","analysis_only":True,"totals":totals,"profiles":profiles,"integration":integration,
+    return {"success":True,"speed_version":"2.20.0","analysis_only":True,"totals":totals,"profiles":profiles,"integration":integration,
             "backfill":{"remaining_meetings":remaining,"complete":remaining==0,"latest_batch":latest_batch,
                         "meeting_outcomes":outcome_counts},
             "resumable":True,"in_run_used":False}
