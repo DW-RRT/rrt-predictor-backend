@@ -2112,7 +2112,7 @@ def _save_prediction_snapshot(
         "eligible_race_count": prediction_response.get("eligible_race_count"),
         "runner_count": prediction_response.get("runner_count"),
         "prediction_summary": prediction_response.get("prediction_summary"),
-        "predictions": prediction_response.get("predictions") or {},
+        "predictions": _compact_public_prediction_value(prediction_response.get("predictions") or {}),
         "factor_capture": prediction_response.get("factor_capture") or {},
     }
 
@@ -2680,6 +2680,25 @@ def api_punting_form_ratings(
         }
 
 
+_PUBLIC_INTERNAL_PREDICTION_KEYS = {
+    "score_breakdown", "weighted_breakdown", "factor_capture", "speed_profile",
+    "historical_horse_profile", "historical_trainer_profile", "historical_jockey_profile",
+    "pf_ai_strategy", "raw_component_scores", "weighted_component_scores", "scoring_weights",
+}
+
+
+def _compact_public_prediction_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_compact_public_prediction_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _compact_public_prediction_value(item)
+            for key, item in value.items()
+            if key not in _PUBLIC_INTERNAL_PREDICTION_KEYS
+        }
+    return value
+
+
 def _build_public_prediction_response(prediction_response: Dict[str, Any]) -> Dict[str, Any]:
     """Return the compact mobile/API response while retaining full capture internally."""
     factor_capture = prediction_response.get("factor_capture") or {}
@@ -2727,6 +2746,7 @@ def _build_public_prediction_response(prediction_response: Dict[str, Any]) -> Di
             "scratchings_unmatched_count": scratchings_merge.get("scratchings_unmatched_count"),
         },
         "active_weight_set_version": prediction_response.get("active_weight_set_version"),
+        "timings": prediction_response.get("timings") or {},
     }
 
 
@@ -2737,6 +2757,7 @@ def api_punting_form_predict(
     race_number: int = 0,
     runs: int = 10,
 ):
+    request_started = time.perf_counter()
     try:
         prediction_response = predict_meeting_from_punting_form(
             meeting_id=meeting_id,
@@ -2745,9 +2766,13 @@ def api_punting_form_predict(
         )
 
         if prediction_response.get("success"):
+            persistence_started = time.perf_counter()
             snapshot = _save_prediction_snapshot(
                 meeting_id=meeting_id,
                 prediction_response=prediction_response,
+            )
+            prediction_response.setdefault("timings", {})["snapshot_and_factor_persistence_seconds"] = round(
+                time.perf_counter() - persistence_started, 4
             )
 
             postgres_history = snapshot.get("postgres_history") or {}
@@ -2767,8 +2792,19 @@ def api_punting_form_predict(
                 "note": "v2.20.1 persistence status is reported from the actual PostgreSQL save response; runner-factor capture is reported separately.",
             }
 
+        public_build_started = time.perf_counter()
         public_response = _build_public_prediction_response(prediction_response)
         public_response["prediction_history"] = prediction_response.get("prediction_history") or {}
+        public_response.setdefault("timings", {})["public_response_build_seconds"] = round(
+            time.perf_counter() - public_build_started, 4
+        )
+        public_response["timings"]["total_api_request_seconds"] = round(
+            time.perf_counter() - request_started, 4
+        )
+        print(
+            f"RRT_API_TIMING meeting_id={meeting_id} stages={public_response.get('timings')}",
+            flush=True,
+        )
 
         # v2.21.0 corrective optimisation: refresh profile caches after the compact
         # prediction response is returned, rather than blocking the live request.

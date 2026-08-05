@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 import time
 
-from database import fetch_one
+from database import fetch_all, fetch_one
 from profile_cache_engine import cache_profiles_from_form_data, enrich_form_data_with_cached_profiles, refresh_strike_rates
 
 from punting_form_client import (
@@ -337,82 +337,119 @@ def _runner_factor_key(
 
 
 
-def get_normalised_speed_rating(runner_id: Any, meeting_date: Any = None, runner_name: Any = None) -> Dict[str, Any]:
-    """Return a leakage-safe rolling speed score from official prior results only."""
-    rid = safe_int(runner_id, 0)
+def _neutral_speed_profile(source: str, cutoff: str = "") -> Dict[str, Any]:
+    result = {"score": 50.0, "completed_runs": 0, "source": source}
+    if cutoff:
+        result["cutoff_date"] = cutoff
+    return result
+
+
+def _build_speed_profile(rows: List[Dict[str, Any]], cutoff: str, identity_source: str) -> Dict[str, Any]:
+    values = [safe_float(row.get("normalised_speed_score"), 50.0) for row in rows[:5]]
+    if not values:
+        return _neutral_speed_profile("neutral_no_prior_history", cutoff)
+
+    avg3 = sum(values[:3]) / len(values[:3])
+    avg5 = sum(values) / len(values)
+    best = max(values)
+    mean = avg5
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    consistency = clamp(100.0 - (variance ** 0.5) * 2.0)
+    score = avg3 * 0.55 + avg5 * 0.25 + best * 0.10 + consistency * 0.10
+
+    return {
+        "score": round(clamp(score), 1),
+        "completed_runs": len(values),
+        "avg_last3": round(avg3, 2),
+        "avg_last5": round(avg5, 2),
+        "best": round(best, 2),
+        "consistency": round(consistency, 2),
+        "latest_run_date": rows[0].get("meeting_date"),
+        "cutoff_date": cutoff,
+        "identity_source": identity_source,
+        "source": "pre_race_official_time_history",
+        "leakage_safe": True,
+    }
+
+
+def load_meeting_speed_profiles(races: List[Dict[str, Any]], meeting_date: Any) -> Dict[str, Dict[str, Any]]:
+    """Load leakage-safe Speed Rating history for all meeting runners in one SQL query."""
     cutoff = normalise_date(meeting_date)
-    name = str(runner_name or "").strip()
+    profiles: Dict[str, Dict[str, Any]] = {}
     if not cutoff:
-        return {"score": 50.0, "completed_runs": 0, "source": "neutral_missing_meeting_date"}
-    if rid <= 0 and not name:
-        return {"score": 50.0, "completed_runs": 0, "source": "neutral_no_identity"}
+        return profiles
+
+    runner_ids = set()
+    fallback_names = set()
+    for race in races:
+        for runner in race.get("runners") or []:
+            rid = safe_int(runner.get("runner_id"), 0)
+            name = normalise_text(runner.get("horse_name") or runner.get("runner"))
+            if rid > 0:
+                runner_ids.add(rid)
+            elif name:
+                fallback_names.add(name)
+
+    if not runner_ids and not fallback_names:
+        return profiles
+
     try:
-        if rid > 0:
-            rows = fetch_one(
-                """
-                WITH prior AS (
-                    SELECT normalised_speed_score, meeting_date,
-                           ROW_NUMBER() OVER (ORDER BY meeting_date DESC, id DESC) AS rn
-                    FROM rrt_runner_speed_history
-                    WHERE runner_id = %s
-                      AND meeting_date < %s
-                      AND normalised_speed_score IS NOT NULL
-                    ORDER BY meeting_date DESC, id DESC
-                    LIMIT 5
-                )
-                SELECT COUNT(*) AS completed_runs,
-                       AVG(normalised_speed_score) FILTER (WHERE rn <= 3) AS avg_last3,
-                       AVG(normalised_speed_score) AS avg_last5,
-                       MAX(normalised_speed_score) AS best_score,
-                       GREATEST(0, LEAST(100, 100 - COALESCE(STDDEV_POP(normalised_speed_score),0) * 2)) AS consistency,
-                       MAX(meeting_date) AS latest_run_date
-                FROM prior;
-                """,
-                (rid, cutoff),
-            ) or {}
-            identity_source = "runner_id"
-        else:
-            rows = fetch_one(
-                """
-                WITH prior AS (
-                    SELECT normalised_speed_score, meeting_date,
-                           ROW_NUMBER() OVER (ORDER BY meeting_date DESC, id DESC) AS rn
-                    FROM rrt_runner_speed_history
-                    WHERE UPPER(TRIM(COALESCE(runner_name,''))) = UPPER(TRIM(%s))
-                      AND meeting_date < %s
-                      AND normalised_speed_score IS NOT NULL
-                    ORDER BY meeting_date DESC, id DESC
-                    LIMIT 5
-                )
-                SELECT COUNT(*) AS completed_runs,
-                       AVG(normalised_speed_score) FILTER (WHERE rn <= 3) AS avg_last3,
-                       AVG(normalised_speed_score) AS avg_last5,
-                       MAX(normalised_speed_score) AS best_score,
-                       GREATEST(0, LEAST(100, 100 - COALESCE(STDDEV_POP(normalised_speed_score),0) * 2)) AS consistency,
-                       MAX(meeting_date) AS latest_run_date
-                FROM prior;
-                """,
-                (name, cutoff),
-            ) or {}
-            identity_source = "runner_name_fallback"
-        runs = safe_int(rows.get("completed_runs"), 0)
-        if runs <= 0:
-            return {"score": 50.0, "completed_runs": 0, "source": "neutral_no_prior_history", "cutoff_date": cutoff}
-        avg3 = safe_float(rows.get("avg_last3"), 50)
-        avg5 = safe_float(rows.get("avg_last5"), 50)
-        best = safe_float(rows.get("best_score"), 50)
-        consistency = safe_float(rows.get("consistency"), 50)
-        score = avg3 * 0.55 + avg5 * 0.25 + best * 0.10 + consistency * 0.10
-        return {
-            "score": round(clamp(score), 1), "completed_runs": runs,
-            "avg_last3": round(avg3, 2), "avg_last5": round(avg5, 2),
-            "best": round(best, 2), "consistency": round(consistency, 2),
-            "latest_run_date": rows.get("latest_run_date"),
-            "cutoff_date": cutoff, "identity_source": identity_source,
-            "source": "pre_race_official_time_history", "leakage_safe": True,
-        }
+        rows = fetch_all(
+            """
+            WITH candidates AS (
+                SELECT id, runner_id, UPPER(TRIM(COALESCE(runner_name,''))) AS runner_name_key,
+                       normalised_speed_score, meeting_date,
+                       CASE WHEN runner_id = ANY(%s) THEN 'runner_id' ELSE 'runner_name_fallback' END AS identity_source,
+                       CASE WHEN runner_id = ANY(%s) THEN 'ID:' || runner_id::text
+                            ELSE 'NAME:' || UPPER(TRIM(COALESCE(runner_name,''))) END AS identity_key
+                FROM rrt_runner_speed_history
+                WHERE meeting_date < %s
+                  AND normalised_speed_score IS NOT NULL
+                  AND (runner_id = ANY(%s) OR UPPER(TRIM(COALESCE(runner_name,''))) = ANY(%s))
+            ), ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY identity_key ORDER BY meeting_date DESC, id DESC
+                ) AS rn
+                FROM candidates
+            )
+            SELECT identity_key, identity_source, normalised_speed_score, meeting_date
+            FROM ranked
+            WHERE rn <= 5
+            ORDER BY identity_key, meeting_date DESC;
+            """,
+            (list(runner_ids), list(runner_ids), cutoff, list(runner_ids), list(fallback_names)),
+        )
     except Exception:
-        return {"score": 50.0, "completed_runs": 0, "source": "neutral_lookup_error", "cutoff_date": cutoff}
+        return profiles
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    sources: Dict[str, str] = {}
+    for row in rows:
+        key = str(row.get("identity_key") or "")
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(row)
+        sources[key] = str(row.get("identity_source") or "runner_id")
+
+    for key, history in grouped.items():
+        profiles[key] = _build_speed_profile(history, cutoff, sources.get(key, "runner_id"))
+    return profiles
+
+
+def get_normalised_speed_rating(runner_id: Any, meeting_date: Any = None, runner_name: Any = None) -> Dict[str, Any]:
+    """Compatibility lookup retained for non-meeting callers; live prediction uses the batch loader."""
+    cutoff = normalise_date(meeting_date)
+    rid = safe_int(runner_id, 0)
+    name_key = normalise_text(runner_name)
+    if not cutoff:
+        return _neutral_speed_profile("neutral_missing_meeting_date")
+    if rid <= 0 and not name_key:
+        return _neutral_speed_profile("neutral_no_identity", cutoff)
+
+    pseudo_runner = {"runner_id": rid, "horse_name": name_key}
+    profiles = load_meeting_speed_profiles([{"runners": [pseudo_runner]}], cutoff)
+    key = f"ID:{rid}" if rid > 0 else f"NAME:{name_key}"
+    return profiles.get(key) or _neutral_speed_profile("neutral_no_prior_history", cutoff)
 
 
 def score_each_way_profile(runner: Dict[str, Any]) -> float:
@@ -558,11 +595,13 @@ def score_runner(
     barrier_score = score_barrier(runner.get("barrier"), field_size)
     weight_score = score_weight(runner.get("weight_kg"))
     market_score = score_price(runner.get("price_sp"))
-    speed_profile = get_normalised_speed_rating(
-        runner.get("runner_id"),
-        race.get("meeting_date") or race.get("date") or runner.get("meeting_date"),
-        runner.get("horse_name") or runner.get("runner"),
-    )
+    speed_profile = runner.get("_speed_profile")
+    if not isinstance(speed_profile, dict):
+        speed_profile = get_normalised_speed_rating(
+            runner.get("runner_id"),
+            race.get("meeting_date") or race.get("date") or runner.get("meeting_date"),
+            runner.get("horse_name") or runner.get("runner"),
+        )
     speed_score = safe_float(speed_profile.get("score"), 50.0)
 
     final_score = (
@@ -1526,10 +1565,24 @@ def predict_from_form_data(
         if not is_barrier_trial_race(race)
     ]
 
-    all_ranked = []
+    stage_started = time.perf_counter()
+    speed_profiles = load_meeting_speed_profiles(eligible_races, meeting_date_for_speed)
+    speed_lookup_seconds = time.perf_counter() - stage_started
 
     for race in eligible_races:
+        for runner in race.get("runners") or []:
+            rid = safe_int(runner.get("runner_id"), 0)
+            name_key = normalise_text(runner.get("horse_name") or runner.get("runner"))
+            identity_key = f"ID:{rid}" if rid > 0 else f"NAME:{name_key}"
+            runner["_speed_profile"] = speed_profiles.get(identity_key) or _neutral_speed_profile(
+                "neutral_no_prior_history", normalise_date(meeting_date_for_speed)
+            )
+
+    stage_started = time.perf_counter()
+    all_ranked = []
+    for race in eligible_races:
         all_ranked.extend(score_race(race))
+    scoring_seconds = time.perf_counter() - stage_started
 
     all_ranked = sorted(
         all_ranked,
@@ -1626,6 +1679,10 @@ def predict_from_form_data(
         "eligible_race_count": len(eligible_races),
         "excluded_barrier_trial_count": len(races) - len(eligible_races),
         "runner_count": len(all_ranked),
+        "timings": {
+            "speed_rating_batch_lookup_seconds": round(speed_lookup_seconds, 4),
+            "runner_scoring_seconds": round(scoring_seconds, 4),
+        },
         "prediction_summary": {
             "meeting_strength": "Punting Form API Assessment",
             "confidence_score": confidence_average,
@@ -1692,22 +1749,18 @@ def predict_meeting_from_punting_form(
     race_number: int = 0,
     runs: int = 10,
 ) -> Dict[str, Any]:
-    # Load the active production weight set before scoring this meeting.
+    timings: Dict[str, float] = {}
+    total_started = time.perf_counter()
+
+    stage_started = time.perf_counter()
     refresh_active_scoring_weights()
+    timings["active_weights_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    raw_response = get_meeting_form(
-        meeting_id=meeting_id,
-        race_number=race_number,
-        runs=runs,
-    )
-
+    stage_started = time.perf_counter()
+    raw_response = get_meeting_form(meeting_id=meeting_id, race_number=race_number, runs=runs)
     form_data = simplify_form_response(raw_response)
+    timings["punting_form_meeting_form_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    # v2.21.0 corrective optimisation: the live prediction path scores directly
-    # from the current Punting Form response. Profile-cache persistence and strike-
-    # rate refresh run asynchronously from the API route after the response.
-    # Cached profile payloads were not used in scoring and previously caused
-    # hundreds of synchronous database operations per meeting.
     form_data = {
         **form_data,
         "profile_cache_merge": {
@@ -1716,44 +1769,38 @@ def predict_meeting_from_punting_form(
         },
     }
 
-    meeting_metadata = fetch_meeting_metadata(
-        meeting_id=meeting_id,
-    )
+    stage_started = time.perf_counter()
+    meeting_metadata = fetch_meeting_metadata(meeting_id=meeting_id)
+    form_data = merge_meeting_metadata_into_form_data(form_data=form_data, meeting_metadata=meeting_metadata)
+    timings["meeting_metadata_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    form_data = merge_meeting_metadata_into_form_data(
-        form_data=form_data,
-        meeting_metadata=meeting_metadata,
-    )
+    stage_started = time.perf_counter()
+    scratchings_data = fetch_scratchings_for_meeting(meeting_id=meeting_id)
+    form_data = merge_scratchings_into_form_data(form_data=form_data, scratchings_data=scratchings_data)
+    timings["scratchings_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    scratchings_data = fetch_scratchings_for_meeting(
-        meeting_id=meeting_id,
-    )
+    stage_started = time.perf_counter()
+    condition_data = fetch_condition_for_meeting(meeting_id=meeting_id, form_data=form_data)
+    timings["conditions_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    form_data = merge_scratchings_into_form_data(
-        form_data=form_data,
-        scratchings_data=scratchings_data,
-    )
+    stage_started = time.perf_counter()
+    ratings_data = fetch_ratings_for_meeting(meeting_id=meeting_id)
+    form_data = merge_ratings_into_form_data(form_data=form_data, ratings_data=ratings_data)
+    timings["ratings_seconds"] = round(time.perf_counter() - stage_started, 4)
 
-    condition_data = fetch_condition_for_meeting(
-        meeting_id=meeting_id,
-        form_data=form_data,
-    )
-
-    ratings_data = fetch_ratings_for_meeting(
-        meeting_id=meeting_id,
-    )
-
-    form_data = merge_ratings_into_form_data(
-        form_data=form_data,
-        ratings_data=ratings_data,
-    )
-
-    return predict_from_form_data(
+    stage_started = time.perf_counter()
+    result = predict_from_form_data(
         form_data=form_data,
         meeting_id=meeting_id,
         condition_data=condition_data,
         ratings_data=ratings_data,
     )
+    timings["prediction_build_seconds"] = round(time.perf_counter() - stage_started, 4)
+    timings.update(result.get("timings") or {})
+    timings["total_prediction_engine_seconds"] = round(time.perf_counter() - total_started, 4)
+    result["timings"] = timings
+    print(f"RRT_PREDICTION_TIMING meeting_id={meeting_id} stages={timings}", flush=True)
+    return result
 
 
 if __name__ == "__main__":
