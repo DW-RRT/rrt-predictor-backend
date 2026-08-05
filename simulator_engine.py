@@ -518,11 +518,6 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "old_weight": old_weight,
             "new_weight": new_weight,
             "change_amount": change_amount,
-            "simulation_group": simulation_group,
-            "factor_tested": factor_tested,
-            "old_weight": old_weight,
-            "new_weight": new_weight,
-            "change_amount": change_amount,
             "analysis_only": True,
             "prediction_model_changed": False,
             "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
@@ -554,20 +549,26 @@ def save_weight_simulation(simulation: Dict[str, Any]) -> Dict[str, Any]:
             INSERT INTO rrt_weight_simulations (
                 simulation_id, simulation_name, simulator_version, model_version, dataset_runner_count, dataset_race_count,
                 current_weights_json, test_weights_json, roughie_rules_json, current_metrics_json, simulated_metrics_json,
-                improvement_json, recommendation_json, simulation_json, notes
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s)
+                improvement_json, recommendation_json, simulation_json, notes,
+                simulation_group, factor_tested, old_weight, new_weight, change_amount
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (simulation_id) DO UPDATE SET
                 simulation_name=EXCLUDED.simulation_name, test_weights_json=EXCLUDED.test_weights_json,
                 roughie_rules_json=EXCLUDED.roughie_rules_json, current_metrics_json=EXCLUDED.current_metrics_json,
                 simulated_metrics_json=EXCLUDED.simulated_metrics_json, improvement_json=EXCLUDED.improvement_json,
                 recommendation_json=EXCLUDED.recommendation_json, simulation_json=EXCLUDED.simulation_json,
-                notes=EXCLUDED.notes, created_at=NOW();
+                notes=EXCLUDED.notes, simulation_group=EXCLUDED.simulation_group,
+                factor_tested=EXCLUDED.factor_tested, old_weight=EXCLUDED.old_weight,
+                new_weight=EXCLUDED.new_weight, change_amount=EXCLUDED.change_amount,
+                created_at=NOW();
         """, (
             simulation.get("simulation_id"), simulation.get("simulation_name"), simulation.get("simulator_version"), MODEL_VERSION,
             (simulation.get("dataset") or {}).get("completed_runner_rows"), (simulation.get("dataset") or {}).get("race_count"),
             _json_dumps(simulation.get("current_weights") or {}), _json_dumps(simulation.get("test_weights") or {}), _json_dumps(simulation.get("roughie_rules") or {}),
             _json_dumps((simulation.get("current_model") or {}).get("metrics") or {}), _json_dumps((simulation.get("simulated_model") or {}).get("metrics") or {}),
             _json_dumps(simulation.get("improvement") or {}), _json_dumps(simulation.get("recommendation") or {}), _json_dumps(simulation), simulation.get("notes") or "",
+            simulation.get("simulation_group"), simulation.get("factor_tested"), simulation.get("old_weight"),
+            simulation.get("new_weight"), simulation.get("change_amount"),
         ))
         return {"success": True, "provider": "PostgreSQL", "message": "Weight simulation saved.", "simulation_id": simulation.get("simulation_id"), "duplicate_safe": True}
     except Exception as error:
@@ -591,7 +592,7 @@ def get_best_simulations(limit: int=10) -> Dict[str, Any]:
         rows = fetch_all("""
             SELECT simulation_id, simulation_name, simulator_version, model_version, dataset_runner_count, dataset_race_count,
                    ROUND((improvement_json->>'overall_accuracy')::NUMERIC, 2) AS overall_improvement,
-                   ROUND((improvement_json->>'top_win_strike_rate')::NUMERIC, 2) AS top_win_improvement,
+                   ROUND((improvement_json->>'top4_winner_coverage_rate')::NUMERIC, 2) AS top_win_improvement,
                    ROUND((improvement_json->>'each_way_strike_rate')::NUMERIC, 2) AS each_way_improvement,
                    ROUND((improvement_json->>'roughie_strike_rate')::NUMERIC, 2) AS roughie_improvement,
                    recommendation_json, notes, created_at
@@ -629,14 +630,14 @@ def run_default_simulation_suite(
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.20.1 aligned Top 20 Value Index suite",
+                notes="v2.21.0 aligned Top 20 Value Index suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.20.1 aligned Top 20 Value Index suite",
+                simulation_group="v2.21.0 aligned Top 20 Value Index suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -717,10 +718,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the v2.19.5b rollback baseline with the active v2.20.1 weights."""
+    """Compare the rollback baseline with the active v2.21.0 production weights."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.20.1 production calibration",
+        simulation_name="v2.21.0 production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -728,7 +729,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.20.1 production calibration",
+        simulation_group="v2.21.0 production calibration",
     )
 
 

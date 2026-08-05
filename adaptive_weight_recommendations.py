@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 from factor_analysis import get_factor_effectiveness_report
 from database import fetch_one
 
-RECOMMENDATION_VERSION = "2.19.6"
+RECOMMENDATION_VERSION = "2.21.0"
 
 CURRENT_MODEL_WEIGHTS = {
     "last10": 14.0,
@@ -70,6 +70,6 @@ def get_weight_recommendations() -> Dict[str, Any]:
         reduce = [item for item in recommendations if item.get("change", 0) < 0]
         hold = [item for item in recommendations if item.get("change", 0) == 0]
         net_change = round(sum(_to_float(item.get("change")) for item in recommendations), 2)
-        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": _active_model_weights(), "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "Recommendations are measured against the active v2.19.6 calibrated production weights, including Speed at 10%. Automatic promotion is disabled; recommendations remain analysis-only."}
+        return {"success": True, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "analysis_only": True, "prediction_model_changed": False, "dataset": dataset, "current_model_weights": _active_model_weights(), "recommendations": recommendations, "summary": {"dataset_confidence": dataset_confidence, "increase_candidates": len(increase), "reduction_candidates": len(reduce), "hold_candidates": len(hold), "net_recommended_weight_change": net_change, "top_increase_candidates": sorted(increase, key=lambda item: item.get("change") or 0, reverse=True)[:5], "top_reduction_candidates": sorted(reduce, key=lambda item: item.get("change") or 0)[:5]}, "safety_note": "Recommendations are measured against the active PostgreSQL production weights, including Speed at 10%. Automatic promotion is disabled; recommendations remain analysis-only."}
     except Exception as error:
         return {"success": False, "provider": "RRT Predictor", "recommendation_version": RECOMMENDATION_VERSION, "report": "weight_recommendations", "error": str(error)}

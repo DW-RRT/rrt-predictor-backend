@@ -1104,7 +1104,9 @@ def api_profiles_horses_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query
 def api_profiles_trainers_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query(100,ge=1),period:str='last100'):
     return get_strike_rate_leaderboard('trainer',limit,min_starts,period)
 
-@app.get("/api/profiles/jockeys/top")
+@app.get("/api/profiles/jockeys/top", name="profiles_jockeys_top")
+@app.get("/api/profiles/jockeys/top/", include_in_schema=False)
+@app.get("/api/profiles/jockey/top", include_in_schema=False)
 def api_profiles_jockeys_top(limit:int=Query(20,ge=1,le=100),min_starts:int=Query(100,ge=1),period:str='last100'):
     return get_strike_rate_leaderboard('jockey',limit,min_starts,period)
 
