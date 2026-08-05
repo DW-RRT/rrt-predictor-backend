@@ -1703,14 +1703,18 @@ def predict_meeting_from_punting_form(
 
     form_data = simplify_form_response(raw_response)
 
-    # v2.21.0: persist raw Punting Form horse history and enrich runners from the
-    # automatic profile cache. Failure is non-fatal and never blocks predictions.
-    try:
-        cache_profiles_from_form_data(form_data, meeting_id=meeting_id)
-        refresh_strike_rates(meeting_id=meeting_id)
-        form_data = enrich_form_data_with_cached_profiles(form_data)
-    except Exception:
-        form_data = {**form_data, "profile_cache_merge": {"status": "unavailable", "prediction_continued": True}}
+    # v2.21.0 corrective optimisation: the live prediction path scores directly
+    # from the current Punting Form response. Profile-cache persistence and strike-
+    # rate refresh run asynchronously from the API route after the response.
+    # Cached profile payloads were not used in scoring and previously caused
+    # hundreds of synchronous database operations per meeting.
+    form_data = {
+        **form_data,
+        "profile_cache_merge": {
+            "status": "deferred_background_refresh",
+            "prediction_continued": True,
+        },
+    }
 
     meeting_metadata = fetch_meeting_metadata(
         meeting_id=meeting_id,

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, UploadFile, File, Response
+from fastapi import FastAPI, Query, UploadFile, File, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from typing import Any, Dict, List, Optional
@@ -2680,8 +2680,59 @@ def api_punting_form_ratings(
         }
 
 
+def _build_public_prediction_response(prediction_response: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the compact mobile/API response while retaining full capture internally."""
+    factor_capture = prediction_response.get("factor_capture") or {}
+    scratchings_merge = prediction_response.get("scratchings_merge") or {}
+    ratings_merge = prediction_response.get("ratings_merge") or {}
+    meeting_metadata_merge = prediction_response.get("meeting_metadata_merge") or {}
+
+    return {
+        "success": prediction_response.get("success", False),
+        "provider": prediction_response.get("provider"),
+        "source": prediction_response.get("source"),
+        "prediction_type": prediction_response.get("prediction_type"),
+        "model_version": prediction_response.get("model_version"),
+        "meeting_id": prediction_response.get("meeting_id"),
+        "meeting_date": prediction_response.get("meeting_date"),
+        "country": prediction_response.get("country") or (meeting_metadata_merge.get("track") or {}).get("country"),
+        "race_type": prediction_response.get("race_type") or "Horse",
+        "track": prediction_response.get("track"),
+        "timezone": prediction_response.get("timezone") or "Australia/Sydney",
+        "track_condition": prediction_response.get("track_condition"),
+        "weather": prediction_response.get("weather"),
+        "eligible_race_count": prediction_response.get("eligible_race_count"),
+        "excluded_barrier_trial_count": prediction_response.get("excluded_barrier_trial_count"),
+        "runner_count": prediction_response.get("runner_count"),
+        "prediction_summary": prediction_response.get("prediction_summary") or {},
+        "predictions": prediction_response.get("predictions") or {},
+        "factor_capture": {
+            "version": factor_capture.get("version"),
+            "capture_scope": factor_capture.get("capture_scope"),
+            "status": factor_capture.get("status"),
+            "runner_count": factor_capture.get("runner_count", 0),
+            "race_count": factor_capture.get("race_count", 0),
+        },
+        "ratings_merge": {
+            "ratings_success": ratings_merge.get("ratings_success"),
+            "ratings_source": ratings_merge.get("ratings_source"),
+            "ratings_matched_count": ratings_merge.get("ratings_matched_count"),
+            "ratings_unmatched_count": ratings_merge.get("ratings_unmatched_count"),
+        },
+        "scratchings_merge": {
+            "scratchings_success": scratchings_merge.get("scratchings_success"),
+            "scratchings_source": scratchings_merge.get("scratchings_source"),
+            "scratchings_available_count": scratchings_merge.get("scratchings_available_count"),
+            "scratchings_excluded_count": scratchings_merge.get("scratchings_excluded_count"),
+            "scratchings_unmatched_count": scratchings_merge.get("scratchings_unmatched_count"),
+        },
+        "active_weight_set_version": prediction_response.get("active_weight_set_version"),
+    }
+
+
 @app.get("/api/punting-form-predict")
 def api_punting_form_predict(
+    background_tasks: BackgroundTasks,
     meeting_id: int,
     race_number: int = 0,
     runs: int = 10,
@@ -2716,7 +2767,21 @@ def api_punting_form_predict(
                 "note": "v2.20.1 persistence status is reported from the actual PostgreSQL save response; runner-factor capture is reported separately.",
             }
 
-        return prediction_response
+        public_response = _build_public_prediction_response(prediction_response)
+        public_response["prediction_history"] = prediction_response.get("prediction_history") or {}
+
+        # v2.21.0 corrective optimisation: refresh profile caches after the compact
+        # prediction response is returned, rather than blocking the live request.
+        if prediction_response.get("success"):
+            background_tasks.add_task(
+                refresh_meeting_profiles,
+                meeting_id,
+                runs,
+                False,
+                True,
+            )
+
+        return public_response
 
     except Exception as error:
         return {
