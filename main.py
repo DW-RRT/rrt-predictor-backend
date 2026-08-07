@@ -2523,10 +2523,21 @@ def run_results_processor_once(
             })
             continue
 
-        result = _process_single_meeting_results(
-            meeting_id=int(meeting_id),
-            model_version=item.get("model_version"),
-        )
+        try:
+            result = _process_single_meeting_results(
+                meeting_id=int(meeting_id),
+                model_version=item.get("model_version"),
+            )
+        except Exception as error:
+            failed.append({
+                "meeting_id": meeting_id,
+                "track": item.get("track"),
+                "meeting_date": item.get("meeting_date"),
+                "status": "meeting_processing_error",
+                "message": "Meeting processing failed; remaining pending meetings will continue.",
+                "error": str(error),
+            })
+            continue
 
         if result.get("success"):
             processed.append({
