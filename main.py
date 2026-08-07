@@ -2593,7 +2593,8 @@ async def _results_processor_loop() -> None:
     while True:
         try:
             AUTO_RESULTS_PROCESSOR_STATE["running"] = True
-            result = run_results_processor_once(
+            result = await asyncio.to_thread(
+                run_results_processor_once,
                 limit=AUTO_RESULTS_PROCESSOR_LIMIT,
             )
             AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
