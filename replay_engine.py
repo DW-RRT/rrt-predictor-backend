@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.21.0"
-MODEL_VERSION = "2.21.0"
+REPLAY_VERSION = "2.22.0"
+MODEL_VERSION = "2.22.0"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -95,7 +95,7 @@ def _dataset(min_meeting_date: Optional[str], max_meeting_date: Optional[str], m
         clauses.append("model_version = %s")
         params.append(model_version)
     else:
-        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0')")
+        clauses.append("model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0')")
     return fetch_all(
         f"""
         SELECT meeting_id, model_version, track, meeting_date, race_id, race_number,
@@ -119,7 +119,7 @@ def _race_key(row: Dict[str, Any]) -> Tuple[Any, Any]:
 
 def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str) -> Dict[str, Any]:
     races = 0
-    top1_hits = top4_win_hits = top4_place_hits = roughie_hits = 0
+    top1_hits = top4_win_hits = top5_win_hits = top4_place_hits = roughie_hits = 0
     roughie_races = 0
     winner_rank_bands = {"top_4": 0, "rank_5": 0, "ranks_6_8": 0, "ranks_9_12": 0, "ranks_13_20": 0, "outside_top_20": 0}
     selections: List[Dict[str, Any]] = []
@@ -129,6 +129,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
             continue
         races += 1
         top4 = ranked[:4]
+        top5 = ranked[:5]
         winner = next((r for r in runners if int(_float(r.get("actual_position"), 999)) == 1), None)
         if winner is not None:
             winner_rank = next((idx + 1 for idx, r in enumerate(ranked) if r.get("runner_key") == winner.get("runner_key")), 999)
@@ -140,8 +141,9 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
             else: winner_rank_bands["outside_top_20"] += 1
         top1_hit = int(_float(ranked[0].get("actual_position"), 999)) == 1
         win_hit = winner is not None and winner.get("runner_key") in {r.get("runner_key") for r in top4}
+        top5_win_hit = winner is not None and winner.get("runner_key") in {r.get("runner_key") for r in top5}
         place_hit = any(1 <= int(_float(r.get("actual_position"), 999)) <= 3 for r in top4)
-        top1_hits += int(top1_hit); top4_win_hits += int(win_hit); top4_place_hits += int(place_hit)
+        top1_hits += int(top1_hit); top4_win_hits += int(win_hit); top5_win_hits += int(top5_win_hit); top4_place_hits += int(place_hit)
         # v2.20.0: shortlist ranks 5-20, then use a distinct roughie/value profile.
         top_20 = ranked[:20]
         roughie_pool = top_20[4:20]
@@ -166,13 +168,15 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
             "meeting_id": key[0], "race_number": ranked[0].get("race_number"), "track": ranked[0].get("track"),
             "meeting_date": ranked[0].get("meeting_date"), "top_selection": ranked[0].get("runner_name"),
             "top_selection_score": round(_float(ranked[0].get(score_key)), 2), "top_selection_position": ranked[0].get("actual_position"),
-            "winner": winner.get("runner_name") if winner else None, "top1_hit": top1_hit, "top4_win_hit": win_hit,
+            "winner": winner.get("runner_name") if winner else None, "top1_hit": top1_hit, "top4_win_hit": win_hit, "top5_win_hit": top5_win_hit,
             "top4_place_hit": place_hit, "roughie_hit": roughie_hit,
         })
     pct = lambda hits, total: round((hits / total * 100.0), 2) if total else 0.0
     return {
         "race_count": races, "top1_win_hits": top1_hits, "top1_win_strike_rate": pct(top1_hits, races),
         "top4_win_hits": top4_win_hits, "top4_win_strike_rate": pct(top4_win_hits, races),
+        "top5_win_hits": top5_win_hits, "top5_win_strike_rate": pct(top5_win_hits, races),
+        "top5_incremental_gain_vs_top4": round(pct(top5_win_hits, races) - pct(top4_win_hits, races), 2),
         "top4_place_hits": top4_place_hits, "top4_place_strike_rate": pct(top4_place_hits, races),
         "roughie_eligible_races": roughie_races, "roughie_win_hits": roughie_hits,
         "roughie_win_strike_rate": pct(roughie_hits, roughie_races),
@@ -182,7 +186,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
 
 
 def run_historical_replay(
-    replay_name: str = "v2.21.0 production-versus-candidate replay",
+    replay_name: str = "v2.22.0 production-versus-candidate replay",
     test_weights: Optional[Dict[str, Any]] = None,
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
@@ -206,7 +210,7 @@ def run_historical_replay(
         replay = _metrics(groups, "replay_score")
         improvement = {
             key: round(_float(replay.get(key)) - _float(current.get(key)), 2)
-            for key in ["top1_win_strike_rate", "top4_win_strike_rate", "top4_place_strike_rate", "roughie_win_strike_rate"]
+            for key in ["top1_win_strike_rate", "top4_win_strike_rate", "top5_win_strike_rate", "top5_incremental_gain_vs_top4", "top4_place_strike_rate", "roughie_win_strike_rate"]
         }
         replay_id = f"replay-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
         result = {

@@ -13,8 +13,8 @@ from replay_engine import run_historical_replay
 from selection_intelligence import run_selection_intelligence_analysis
 from simulator_engine import run_weight_simulation
 
-PROMOTION_VERSION = "2.21.0"
-MODEL_VERSION = "2.21.0"
+PROMOTION_VERSION = "2.22.0"
+MODEL_VERSION = "2.22.0"
 
 PROMOTION_MODE = os.getenv("RRT_PROMOTION_MODE", "shadow").strip().lower()
 if PROMOTION_MODE not in {"off", "shadow", "live"}:
@@ -25,6 +25,7 @@ MIN_COMPLETED_RUNNERS = int(os.getenv("RRT_PROMOTION_MIN_COMPLETED_RUNNERS", "80
 MIN_OVERALL_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_OVERALL_IMPROVEMENT", "0.25"))
 MIN_TOP1_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP1_IMPROVEMENT", "0.00"))
 MIN_TOP4_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP4_IMPROVEMENT", "0.00"))
+MIN_TOP5_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP5_IMPROVEMENT", "0.00"))
 MAX_EACH_WAY_DEGRADATION = float(os.getenv("RRT_PROMOTION_MAX_EACH_WAY_DEGRADATION", "0.25"))
 MAX_ROUGHIE_DEGRADATION = float(os.getenv("RRT_PROMOTION_MAX_ROUGHIE_DEGRADATION", "0.25"))
 MIN_STABILITY_INDEX = float(os.getenv("RRT_PROMOTION_MIN_STABILITY_INDEX", "90.0"))
@@ -132,11 +133,13 @@ def _gate(dataset: Dict[str, Any], simulation: Dict[str, Any], replay: Dict[str,
         "simulator_overall_improvement": _float(simulation_improvement.get("overall_accuracy")) >= MIN_OVERALL_IMPROVEMENT,
         "simulator_top1_not_degraded": _float(simulation_improvement.get("top1_win_strike_rate")) >= MIN_TOP1_IMPROVEMENT,
         "simulator_top4_not_degraded": _float(simulation_improvement.get("top4_winner_coverage_rate")) >= MIN_TOP4_IMPROVEMENT,
+        "simulator_top5_not_degraded": _float(simulation_improvement.get("top5_winner_coverage_rate")) >= MIN_TOP5_IMPROVEMENT,
         "simulator_each_way_within_tolerance": _float(simulation_improvement.get("each_way_strike_rate")) >= -MAX_EACH_WAY_DEGRADATION,
         "simulator_roughie_within_tolerance": _float(simulation_improvement.get("roughie_strike_rate")) >= -MAX_ROUGHIE_DEGRADATION,
         "prediction_stability": _float(sensitivity.get("prediction_stability_index"), 100.0) >= MIN_STABILITY_INDEX,
         "replay_top1_not_degraded": _float(replay_improvement.get("top1_win_strike_rate")) >= MIN_TOP1_IMPROVEMENT,
         "replay_top4_not_degraded": _float(replay_improvement.get("top4_win_strike_rate")) >= MIN_TOP4_IMPROVEMENT,
+        "replay_top5_not_degraded": _float(replay_improvement.get("top5_win_strike_rate")) >= MIN_TOP5_IMPROVEMENT,
         "replay_roughie_within_tolerance": _float(replay_improvement.get("roughie_win_strike_rate")) >= -MAX_ROUGHIE_DEGRADATION,
     }
     passed = all(checks.values())
@@ -166,6 +169,7 @@ def _gate(dataset: Dict[str, Any], simulation: Dict[str, Any], replay: Dict[str,
             "minimum_overall_improvement": MIN_OVERALL_IMPROVEMENT,
             "minimum_top1_improvement": MIN_TOP1_IMPROVEMENT,
             "minimum_top4_improvement": MIN_TOP4_IMPROVEMENT,
+            "minimum_top5_improvement": MIN_TOP5_IMPROVEMENT,
             "maximum_each_way_degradation": MAX_EACH_WAY_DEGRADATION,
             "maximum_roughie_degradation": MAX_ROUGHIE_DEGRADATION,
             "minimum_stability_index": MIN_STABILITY_INDEX,
@@ -223,7 +227,7 @@ def _promote(
     candidate_weights: Dict[str, float],
     gate: Dict[str, Any],
 ) -> Dict[str, Any]:
-    new_weight_set = f"2.21.0-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    new_weight_set = f"2.22.0-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     execute_sql("UPDATE rrt_model_weight_sets SET status='Archive' WHERE status='Rollback';")
     execute_sql("UPDATE rrt_model_weight_sets SET status='Rollback' WHERE status='Active';")
     execute_sql(
@@ -231,7 +235,7 @@ def _promote(
         INSERT INTO rrt_model_weight_sets(
             model_version, status, weights_json, source, notes, activated_at,
             promoted_by_cycle_id, promotion_evidence_json, automatic_promotion
-        ) VALUES(%s,'Active',%s::jsonb,'v2.21.0 Promotion Controller',%s,NOW(),%s,%s::jsonb,TRUE);
+        ) VALUES(%s,'Active',%s::jsonb,'v2.22.0 Promotion Controller',%s,NOW(),%s,%s::jsonb,TRUE);
         """,
         (
             new_weight_set,
@@ -255,7 +259,7 @@ def _promote(
 
 def run_promotion_cycle(
     cycle_id: Optional[str] = None,
-    candidate_name: str = "v2.21.0 autonomous promotion candidate",
+    candidate_name: str = "v2.22.0 autonomous promotion candidate",
     save_result: bool = True,
 ) -> Dict[str, Any]:
     try:
@@ -274,9 +278,9 @@ def run_promotion_cycle(
         simulation = run_weight_simulation(
             test_weights=candidate_weights,
             simulation_name=candidate_name,
-            notes="v2.21.0 exact adaptive candidate evaluated by the promotion controller.",
+            notes="v2.22.0 exact adaptive candidate evaluated by the promotion controller.",
             save_result=True,
-            simulation_group="v2.21.0 promotion-controller",
+            simulation_group="v2.22.0 promotion-controller",
         )
         replay = run_historical_replay(
             replay_name=candidate_name,
@@ -389,6 +393,7 @@ def get_promotion_status() -> Dict[str, Any]:
             "minimum_overall_improvement": MIN_OVERALL_IMPROVEMENT,
             "minimum_top1_improvement": MIN_TOP1_IMPROVEMENT,
             "minimum_top4_improvement": MIN_TOP4_IMPROVEMENT,
+            "minimum_top5_improvement": MIN_TOP5_IMPROVEMENT,
             "maximum_each_way_degradation": MAX_EACH_WAY_DEGRADATION,
             "maximum_roughie_degradation": MAX_ROUGHIE_DEGRADATION,
             "minimum_stability_index": MIN_STABILITY_INDEX,

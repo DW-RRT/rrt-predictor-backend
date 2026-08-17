@@ -13,11 +13,11 @@ from selection_intelligence import get_latest_selection_analysis
 from profile_cache_engine import get_historical_horse_leaderboard, get_strike_rate_leaderboard, get_profile_cache_summary
 
 
-REPORT_VERSION = "2.21.0"
-ANALYTICS_VERSION = "2.21.0"
+REPORT_VERSION = "2.22.0"
+ANALYTICS_VERSION = "2.22.0"
 DATABASE_SCHEMA_VERSION = "2.21.0"
-MODEL_VERSION = "2.21.0"
-LEARNING_VERSION = "2.21.0"
+MODEL_VERSION = "2.22.0"
+LEARNING_VERSION = "2.22.0"
 
 
 
@@ -253,7 +253,7 @@ def get_track_performance_report() -> Dict[str, Any]:
         }
 
 
-def get_best_worst_tracks_report(limit: int = 10) -> Dict[str, Any]:
+def get_best_worst_tracks_report(limit: int = 10, min_meetings: int = 3) -> Dict[str, Any]:
     try:
         best_tracks = fetch_all(
             """
@@ -266,10 +266,11 @@ def get_best_worst_tracks_report(limit: int = 10) -> Dict[str, Any]:
             FROM rrt_performance_snapshots
             WHERE track IS NOT NULL
             GROUP BY track
+            HAVING COUNT(*) >= %s
             ORDER BY avg_overall_accuracy DESC, meeting_count DESC
             LIMIT %s;
             """,
-            (limit,),
+            (min_meetings, limit),
         )
 
         worst_tracks = fetch_all(
@@ -283,10 +284,11 @@ def get_best_worst_tracks_report(limit: int = 10) -> Dict[str, Any]:
             FROM rrt_performance_snapshots
             WHERE track IS NOT NULL
             GROUP BY track
+            HAVING COUNT(*) >= %s
             ORDER BY avg_overall_accuracy ASC, meeting_count DESC
             LIMIT %s;
             """,
-            (limit,),
+            (min_meetings, limit),
         )
 
         return {
@@ -295,6 +297,7 @@ def get_best_worst_tracks_report(limit: int = 10) -> Dict[str, Any]:
             "report_version": REPORT_VERSION,
             "report": "best_worst_tracks",
             "limit": limit,
+            "min_meetings": min_meetings,
             "best_tracks": best_tracks,
             "worst_tracks": worst_tracks,
         }
@@ -978,9 +981,9 @@ def _learning_base() -> Dict[str, Any]:
 
 def _learning_tracks() -> Dict[str, List[Dict[str, Any]]]:
     return {
-        "strong_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy DESC, meeting_count DESC")),
-        "review_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy ASC, meeting_count DESC")),
-        "reliable_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy DESC, meeting_count DESC", "HAVING COUNT(*) >= 2")),
+        "strong_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy DESC, meeting_count DESC", "HAVING COUNT(*) >= 3")),
+        "review_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy ASC, meeting_count DESC", "HAVING COUNT(*) >= 3")),
+        "reliable_tracks": fetch_all(_track_rollup_sql("ORDER BY avg_overall_accuracy DESC, meeting_count DESC", "HAVING COUNT(*) >= 3")),
     }
 
 
@@ -1522,7 +1525,7 @@ def generate_learning_report_html() -> str:
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: automatic weight changes disabled</span>',
         '<h2>Dataset Audit</h2><div class="grid">',
         card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
-        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
+        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
         '</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
@@ -1530,7 +1533,7 @@ def generate_learning_report_html() -> str:
         '<h2>Strengths</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]),
         '<h2>Weaknesses</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('weaknesses') or []]),
         '<h2>Priority Action Plan</h2>', _html_table(['Priority','Action','Reason','Next Step'], [[i.get('priority'),i.get('action'),i.get('reason'),i.get('next_step')] for i in report.get('priority_action_plan') or []]),
-        '<h2>Strongest Tracks</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
+        '<h2>Strongest Tracks</h2><div class="note">Track tables require at least 3 recorded RRT prediction meetings per track.</div>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
         '<h2>Tracks Requiring Review</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
         '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
         '<h2>Rolling Historical Performance Leaderboards — RRT Prediction Runs Only</h2>',
@@ -1559,7 +1562,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">Selection Intelligence v2.21.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
+        '<div class="note">Selection Intelligence v2.22.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
             ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
@@ -1631,7 +1634,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(t(["Metric","Value"], [["Meetings analysed",dataset.get('meeting_count')],["Races analysed",dataset.get('race_count')],["Unique tracks",dataset.get('unique_tracks')],["Unique dates",dataset.get('unique_dates')],["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],["Database schema",DATABASE_SCHEMA_VERSION],["Prediction model",MODEL_VERSION]], [7*cm,9*cm]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
     story.append(Paragraph("Current Model Performance", styles["RRTHeading"]))
-    story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["PF AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / PF AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
+    story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["PF AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / PF AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
     for title, rows in [("Strengths", [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]), ("Weaknesses", [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('weaknesses') or []])]:
         story.append(Paragraph(title, styles["RRTHeading"])); story.append(t(["Area","Priority","Metric","Evidence"], rows, [3.5*cm,2.2*cm,2.2*cm,8.5*cm]))
     story.append(PageBreak())

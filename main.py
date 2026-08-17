@@ -153,7 +153,7 @@ from profile_cache_engine import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.21.0",
+    version="2.22.0",
 )
 
 app.add_middleware(
@@ -189,6 +189,24 @@ AUTO_RESULTS_PROCESSOR_STATE: Dict[str, Any] = {
     "limit": AUTO_RESULTS_PROCESSOR_LIMIT,
     "running": False,
     "last_run_at": None,
+    "last_result": None,
+    "last_error": None,
+}
+
+AUTO_ADAPTIVE_CONTROL_ENABLED = (
+    os.getenv("AUTO_ADAPTIVE_CONTROL_ENABLED", "true").lower() == "true"
+)
+AUTO_ADAPTIVE_CONTROL_MIN_INTERVAL_SECONDS = int(
+    os.getenv("AUTO_ADAPTIVE_CONTROL_MIN_INTERVAL_SECONDS", "21600")
+)
+AUTO_ADAPTIVE_CONTROL_STATE: Dict[str, Any] = {
+    "enabled": AUTO_ADAPTIVE_CONTROL_ENABLED,
+    "minimum_interval_seconds": AUTO_ADAPTIVE_CONTROL_MIN_INTERVAL_SECONDS,
+    "last_run_at": None,
+    "last_started_monotonic": 0.0,
+    "last_learning_cycle_id": None,
+    "last_candidate_id": None,
+    "last_decision": None,
     "last_result": None,
     "last_error": None,
 }
@@ -858,10 +876,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.21.0",
+        "version": "2.22.0",
         "app_version": "1.0.0",
-        "backend_version": "2.21.0",
-        "model_version": "2.21.0",
+        "backend_version": "2.22.0",
+        "model_version": "2.22.0",
     }
 
 
@@ -871,10 +889,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.21.0",
+        "version": "2.22.0",
         "app_version": "1.0.0",
-        "backend_version": "2.21.0",
-        "model_version": "2.21.0",
+        "backend_version": "2.22.0",
+        "model_version": "2.22.0",
         "cache_ttl_seconds": 300
     }
 
@@ -970,10 +988,10 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.21.0",
+        "version": "2.22.0",
         "app_version": "1.0.0",
-        "backend_version": "2.21.0",
-        "model_version": "2.21.0",
+        "backend_version": "2.22.0",
+        "model_version": "2.22.0",
         "database_schema_version": "2.21.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
@@ -1208,8 +1226,11 @@ def api_report_by_track():
 
 
 @app.get("/api/reports/best-worst-tracks")
-def api_report_best_worst_tracks(limit: int = Query(10)):
-    return get_best_worst_tracks_report(limit=limit)
+def api_report_best_worst_tracks(
+    limit: int = Query(10),
+    min_meetings: int = Query(3, ge=1),
+):
+    return get_best_worst_tracks_report(limit=limit, min_meetings=min_meetings)
 
 
 @app.get("/api/reports/rrt-vs-pf-ai")
@@ -1570,7 +1591,7 @@ def api_selection_intelligence_category_analysis():
 
 @app.get("/api/adaptive-learning/run")
 def api_adaptive_learning_run(
-    cycle_name: str = Query("v2.20.1 autonomous adaptive learning cycle"),
+    cycle_name: str = Query("v2.22.0 autonomous adaptive learning cycle"),
 ):
     return run_adaptive_learning_cycle(cycle_name=cycle_name, save_result=True)
 
@@ -2104,7 +2125,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.21.0",
+        "model_version": "2.22.0",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2587,6 +2608,83 @@ def run_results_processor_once(
     }
 
 
+def _run_autonomous_control_if_due(results_run: Dict[str, Any]) -> Dict[str, Any]:
+    """Run adaptive learning and Promotion Controller after new completed results.
+
+    The process is throttled to avoid unnecessary CPU load. Whether an approved
+    candidate can alter production weights remains controlled exclusively by
+    RRT_PROMOTION_MODE in promotion_engine.py: shadow evaluates only; live may
+    promote only after every configured safety gate passes.
+    """
+    if not AUTO_ADAPTIVE_CONTROL_ENABLED:
+        return {"success": True, "status": "disabled"}
+
+    processed_count = int(results_run.get("processed_count") or 0)
+    if processed_count <= 0:
+        return {"success": True, "status": "no_new_completed_meetings"}
+
+    now_monotonic = time.monotonic()
+    last_started = float(AUTO_ADAPTIVE_CONTROL_STATE.get("last_started_monotonic") or 0.0)
+    if last_started and (now_monotonic - last_started) < AUTO_ADAPTIVE_CONTROL_MIN_INTERVAL_SECONDS:
+        return {
+            "success": True,
+            "status": "throttled",
+            "seconds_until_next_cycle": max(
+                0,
+                int(AUTO_ADAPTIVE_CONTROL_MIN_INTERVAL_SECONDS - (now_monotonic - last_started)),
+            ),
+        }
+
+    AUTO_ADAPTIVE_CONTROL_STATE["last_started_monotonic"] = now_monotonic
+    AUTO_ADAPTIVE_CONTROL_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
+
+    try:
+        learning = run_adaptive_learning_cycle(
+            cycle_name="v2.22.0 autonomous adaptive learning cycle",
+            save_result=True,
+        )
+        cycle_id = learning.get("cycle_id")
+        if not learning.get("success"):
+            result = {
+                "success": False,
+                "status": "learning_failed",
+                "learning": learning,
+            }
+            AUTO_ADAPTIVE_CONTROL_STATE["last_result"] = result
+            AUTO_ADAPTIVE_CONTROL_STATE["last_error"] = learning.get("error") or learning.get("message")
+            return result
+
+        promotion = run_promotion_cycle(
+            cycle_id=cycle_id,
+            candidate_name="v2.22.0 autonomous adaptive promotion candidate",
+            save_result=True,
+        )
+        gate = promotion.get("promotion_gate") or {}
+        result = {
+            "success": bool(promotion.get("success")),
+            "status": "completed",
+            "processed_meetings_trigger": processed_count,
+            "cycle_id": cycle_id,
+            "candidate_id": promotion.get("candidate_id"),
+            "decision": gate.get("decision"),
+            "promotion_mode": promotion.get("promotion_mode"),
+            "production_weights_changed": promotion.get("production_weights_changed"),
+            "learning": learning,
+            "promotion": promotion,
+        }
+        AUTO_ADAPTIVE_CONTROL_STATE["last_learning_cycle_id"] = cycle_id
+        AUTO_ADAPTIVE_CONTROL_STATE["last_candidate_id"] = promotion.get("candidate_id")
+        AUTO_ADAPTIVE_CONTROL_STATE["last_decision"] = gate.get("decision")
+        AUTO_ADAPTIVE_CONTROL_STATE["last_result"] = result
+        AUTO_ADAPTIVE_CONTROL_STATE["last_error"] = None if promotion.get("success") else promotion.get("error")
+        return result
+    except Exception as error:
+        AUTO_ADAPTIVE_CONTROL_STATE["last_error"] = str(error)
+        result = {"success": False, "status": "error", "error": str(error)}
+        AUTO_ADAPTIVE_CONTROL_STATE["last_result"] = result
+        return result
+
+
 async def _results_processor_loop() -> None:
     await asyncio.sleep(20)
 
@@ -2600,6 +2698,12 @@ async def _results_processor_loop() -> None:
             AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
             AUTO_RESULTS_PROCESSOR_STATE["last_result"] = result
             AUTO_RESULTS_PROCESSOR_STATE["last_error"] = None
+
+            if AUTO_ADAPTIVE_CONTROL_ENABLED and int(result.get("processed_count") or 0) > 0:
+                await asyncio.to_thread(
+                    _run_autonomous_control_if_due,
+                    result,
+                )
         except Exception as error:
             AUTO_RESULTS_PROCESSOR_STATE["last_run_at"] = datetime.utcnow().isoformat() + "Z"
             AUTO_RESULTS_PROCESSOR_STATE["last_error"] = str(error)
@@ -2622,6 +2726,8 @@ def api_results_processor_status():
         "provider": "RRT Predictor",
         "processor_version": "2.13.0",
         "state": AUTO_RESULTS_PROCESSOR_STATE,
+        "adaptive_control": AUTO_ADAPTIVE_CONTROL_STATE,
+        "promotion_status": get_promotion_status(),
         "database_summary": get_results_processor_summary(),
     }
 

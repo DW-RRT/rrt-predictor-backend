@@ -19,8 +19,8 @@ from punting_form_client import (
 )
 
 
-MODEL_VERSION = "2.21.0"
-PREDICTION_TYPE = "RRT Predictor v2.21.0 - Historical Profile Intelligence + Automatic Cache"
+MODEL_VERSION = "2.22.0"
+PREDICTION_TYPE = "RRT Predictor v2.22.0 - Top 5 Display + Autonomous Control + Trifecta Intelligence"
 
 SCORING_WEIGHTS = {
     "recent_form_last10": 0.14,
@@ -714,9 +714,9 @@ def format_reason(runner: Dict[str, Any], category: str = "standard") -> str:
     if category == "roughie":
         rank = safe_int(runner.get("meeting_rank"), 0)
         if 5 <= rank <= 8:
-            reasons.append(f"ranked {rank}th overall and next in line outside the Top 4")
+            reasons.append(f"ranked {rank}th overall and next in line outside the leading Win selections")
         else:
-            reasons.append("rates as an outside chance beyond the Top 4")
+            reasons.append("rates as an outside chance beyond the leading Win selections")
 
     if safe_float(breakdown.get("last10_form")) >= 70:
         reasons.append("strong recent form profile")
@@ -878,7 +878,15 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "top_score": strength.get("top_score"),
                 "top_confidence": strength.get("top_confidence"),
                 "score_margin": strength.get("score_margin"),
-                "selections": [format_runner(runner) for runner in ranked[:3]],
+                "trifecta_strength": round(
+                    clamp(
+                        (sum(safe_float(item.get("score"), 0.0) for item in ranked[:5]) / max(len(ranked[:5]), 1)) * 0.45
+                        + (sum(safe_float(item.get("confidence"), 0.0) for item in ranked[:5]) / max(len(ranked[:5]), 1)) * 0.25
+                        + (sum(safe_float(item.get("each_way_score"), 0.0) for item in ranked[:5]) / max(len(ranked[:5]), 1)) * 0.30
+                    ),
+                    2,
+                ),
+                "selections": [format_runner(runner) for runner in ranked[:5]],
             }
         )
 
@@ -948,7 +956,31 @@ def build_multis(races: List[Dict[str, Any]]) -> Dict[str, Any]:
         default=None,
     )
 
+    best_trifecta_candidate = max(
+        [race for race in ranked_races if len(race.get("selections") or []) >= 5],
+        key=lambda item: (
+            safe_float(item.get("trifecta_strength"), 0.0),
+            safe_float(item.get("leg_strength"), 0.0),
+            -safe_int(item.get("race_number"), 999),
+        ),
+        default=None,
+    )
+
     return {
+        "best_box_trifecta_prediction": {
+            "race_id": (best_trifecta_candidate or {}).get("race_id"),
+            "race_number": (best_trifecta_candidate or {}).get("race_number"),
+            "race_label": (best_trifecta_candidate or {}).get("race_label"),
+            "race_name": (best_trifecta_candidate or {}).get("race_name"),
+            "race_title": (best_trifecta_candidate or {}).get("race_title"),
+            "distance_m": (best_trifecta_candidate or {}).get("distance_m"),
+            "trifecta_strength": (best_trifecta_candidate or {}).get("trifecta_strength"),
+            "selections": (best_trifecta_candidate or {}).get("selections") or [],
+            "box_runner_count": 5 if best_trifecta_candidate else 0,
+            "combination_count": 60 if best_trifecta_candidate else 0,
+            "selection_method": "Strongest five-runner trifecta profile across all eligible races",
+            "status": "Active" if best_trifecta_candidate else "Awaiting an eligible race with five runners",
+        },
         "best_double": {
             "legs": (best_double_candidate or {}).get("legs") or [],
             "combined_score": (best_double_candidate or {}).get("combined_score"),
@@ -1608,7 +1640,7 @@ def predict_from_form_data(
         "active_weight_set_version": get_active_weight_set_version(),
             "pf_ai_strategy": PF_AI_STRATEGY,
             "factor_capture": {
-                "version": "2.20.0",
+                "version": "2.22.0",
                 "capture_scope": "native_full_field",
                 "status": "not_available",
                 "runner_count": 0,
@@ -1623,25 +1655,25 @@ def predict_from_form_data(
         runner["roughie_score"] = score_roughie_profile(runner)
         runner["top_20_eligible"] = safe_int(runner.get("meeting_rank"), 999) <= 20
         runner["value_index"] = score_value_index(runner)
-    top_4_win = sorted(all_ranked, key=lambda r:r.get("win_score",0), reverse=True)[:4]
-    top_4_each_way = select_each_way_distinct(top_20_ranked, top_4_win, limit=4, max_overlap=2)
-    excluded_selection_keys = {r.get("runner_key") for r in top_4_win + top_4_each_way}
+    top_5_win = sorted(all_ranked, key=lambda r:r.get("win_score",0), reverse=True)[:5]
+    top_5_each_way = select_each_way_distinct(top_20_ranked, top_5_win, limit=5, max_overlap=2)
+    excluded_selection_keys = {r.get("runner_key") for r in top_5_win + top_5_each_way}
     roughie_candidate_pool = [
         r for r in top_20_ranked
         if 5 <= safe_int(r.get("meeting_rank"), 999) <= 20
         and r.get("runner_key") not in excluded_selection_keys
     ]
-    top_4_roughies = sorted(
+    top_5_roughies = sorted(
         roughie_candidate_pool,
         key=lambda r: (safe_float(r.get("value_index")), safe_float(r.get("roughie_score"))),
         reverse=True,
-    )[:4]
+    )[:5]
 
     multis = build_multis(eligible_races)
 
     confidence_average = round(
-        sum(safe_float(runner.get("confidence"), 0) for runner in top_4_win)
-        / max(len(top_4_win), 1),
+        sum(safe_float(runner.get("confidence"), 0) for runner in top_5_win)
+        / max(len(top_5_win), 1),
         1,
     )
 
@@ -1709,12 +1741,12 @@ def predict_from_form_data(
                 "distance record, track-distance record, track-condition record, trainer A2E, "
                 "jockey A2E, trainer/jockey A2E, barrier, weight and market price. "
                 "PF AI ratings are merged for comparison only and are not yet used in scoring. "
-                "A single meeting Top 20 ranking feeds Win, Each-Way and Roughie categories. Roughies are value-ranked opportunities drawn only from meeting ranks 5-20, with no hard odds threshold. "
+                "A single meeting Top 20 ranking feeds Win, Each-Way and Roughie categories, with five selections displayed per category. Roughies are value-ranked opportunities drawn only from meeting ranks 5-20, with no hard odds threshold. "
                 "Scratchings are merged from Punting Form Updates Scratchings and excluded before scoring."
             ),
         },
         "factor_capture": {
-            "version": "2.20.0",
+            "version": "2.22.0",
             "capture_scope": "native_full_field",
             "status": "captured",
             "runner_count": len(all_ranked),
@@ -1727,17 +1759,29 @@ def predict_from_form_data(
                 for runner in top_20_ranked
             ],
             "roughie_candidate_range": {"minimum_rank": 5, "maximum_rank": 20, "method": "value_index"},
+            "top_5_win_bets": [
+                format_runner(runner)
+                for runner in top_5_win
+            ],
+            "top_5_each_way_bets": [
+                format_runner(runner)
+                for runner in top_5_each_way
+            ],
+            "top_5_roughies": [
+                format_runner(runner, category="roughie")
+                for runner in top_5_roughies
+            ],
             "top_4_win_bets": [
                 format_runner(runner)
-                for runner in top_4_win
+                for runner in top_5_win[:4]
             ],
             "top_4_each_way_bets": [
                 format_runner(runner)
-                for runner in top_4_each_way
+                for runner in top_5_each_way[:4]
             ],
             "top_4_roughies": [
                 format_runner(runner, category="roughie")
-                for runner in top_4_roughies
+                for runner in top_5_roughies[:4]
             ],
             **multis,
         },
