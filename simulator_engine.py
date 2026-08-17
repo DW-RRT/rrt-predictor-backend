@@ -223,7 +223,7 @@ def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, floa
     for row in race_rows:
         item={**row,"simulated_score":_score_runner_from_weights(row,weights)}; item.update(_category_scores(item)); scored.append(item)
     win_ranked=sorted(scored,key=lambda x:(_to_float(x.get("win_score")),-_to_float(x.get("market_price"),9999)),reverse=True)
-    top_win=win_ranked[:4]; win_keys={x.get("runner_key") for x in top_win}
+    top_win=win_ranked[:4]; top5_win=win_ranked[:5]; win_keys={x.get("runner_key") for x in top_win}
     ew_ranked=sorted(scored,key=lambda x:_to_float(x.get("each_way_score")),reverse=True)
     each_way=[x for x in ew_ranked if x.get("runner_key") not in win_keys][:2]
     for x in ew_ranked:
@@ -236,7 +236,7 @@ def _evaluate_race_rows(race_rows: List[Dict[str, Any]], weights: Dict[str, floa
     top_20 = win_ranked[:20]
     roughie_pool = top_20[4:20]
     roughies = sorted(roughie_pool, key=lambda x:_to_float(x.get("value_index")), reverse=True)[:4]
-    return {"top_20":top_20,"top_4_win":top_win,"top_4_each_way":each_way,"top_4_roughies":roughies}
+    return {"top_20":top_20,"top_4_win":top_win,"top_5_win":top5_win,"top_4_each_way":each_way,"top_4_roughies":roughies}
 
 
 def _selection_summary(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,6 +261,7 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
     race_results = []
     race_count = len(grouped)
     top_win_hits = 0
+    top5_win_hits = 0
     top1_win_hits = 0
     each_way_hits = 0
     each_way_total = 0
@@ -271,6 +272,7 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
         evaluated = _evaluate_race_rows(race_rows, weights, roughie_min_price, roughie_min_market_rank, roughie_min_score)
         top1_hit = bool(evaluated["top_4_win"]) and evaluated["top_4_win"][0].get("actual_position") == 1
         win_hit = any(item.get("actual_position") == 1 for item in evaluated["top_4_win"])
+        top5_win_hit = any(item.get("actual_position") == 1 for item in evaluated["top_5_win"])
         ew_hits = sum(1 for item in evaluated["top_4_each_way"] if item.get("actual_position") in [1,2,3])
         rough_hits = sum(1 for item in evaluated["top_4_roughies"] if item.get("actual_position") in [1,2,3,4])
         winner = next((item for item in evaluated["top_20"] if _to_int(item.get("actual_position"), 999) == 1), None)
@@ -284,6 +286,7 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
             else: winner_rank_bands["outside_top_20"] += 1
         top1_win_hits += 1 if top1_hit else 0
         top_win_hits += 1 if win_hit else 0
+        top5_win_hits += 1 if top5_win_hit else 0
         each_way_hits += ew_hits
         each_way_total += len(evaluated["top_4_each_way"])
         roughie_hits += rough_hits
@@ -297,21 +300,24 @@ def _evaluate_grouped_races(grouped: Dict[str, List[Dict[str, Any]]], weights: D
             "race_number": first.get("race_number"),
             "runner_count": len(race_rows),
             "top_win_hit": win_hit,
+            "top5_win_hit": top5_win_hit,
             "each_way_hit_count": ew_hits,
             "roughie_hit_count": rough_hits,
             "top_4_win": [_selection_summary(i) for i in evaluated["top_4_win"]],
+            "top_5_win": [_selection_summary(i) for i in evaluated["top_5_win"]],
             "top_4_each_way": [_selection_summary(i) for i in evaluated["top_4_each_way"]],
             "top_4_roughies": [_selection_summary(i) for i in evaluated["top_4_roughies"]],
         })
     top1_rate = round((top1_win_hits / race_count) * 100, 2) if race_count else 0.0
     top_win_rate = round((top_win_hits / race_count) * 100, 2) if race_count else 0.0
+    top5_win_rate = round((top5_win_hits / race_count) * 100, 2) if race_count else 0.0
     each_way_rate = round((each_way_hits / each_way_total) * 100, 2) if each_way_total else 0.0
     roughie_rate = round((roughie_hits / roughie_total) * 100, 2) if roughie_total else 0.0
     overall = round((top_win_rate * 0.45) + (each_way_rate * 0.35) + (roughie_rate * 0.20), 2)
     return {
         "race_count": race_count,
-        "selection_totals": {"top1_win_total": race_count, "top1_win_hits": top1_win_hits, "top4_win_total": race_count, "top4_win_hits": top_win_hits, "each_way_total": each_way_total, "each_way_hits": each_way_hits, "roughie_total": roughie_total, "roughie_hits": roughie_hits},
-        "metrics": {"top1_win_strike_rate": top1_rate, "top4_winner_coverage_rate": top_win_rate, "each_way_strike_rate": each_way_rate, "roughie_strike_rate": roughie_rate, "overall_accuracy": overall},
+        "selection_totals": {"top1_win_total": race_count, "top1_win_hits": top1_win_hits, "top4_win_total": race_count, "top4_win_hits": top_win_hits, "top5_win_total": race_count, "top5_win_hits": top5_win_hits, "each_way_total": each_way_total, "each_way_hits": each_way_hits, "roughie_total": roughie_total, "roughie_hits": roughie_hits},
+        "metrics": {"top1_win_strike_rate": top1_rate, "top4_winner_coverage_rate": top_win_rate, "top5_winner_coverage_rate": top5_win_rate, "top5_incremental_gain_vs_top4": round(top5_win_rate - top_win_rate, 2), "each_way_strike_rate": each_way_rate, "roughie_strike_rate": roughie_rate, "overall_accuracy": overall},
         "winner_rank_bands": {k: {"count": v, "rate": round((v / race_count) * 100, 2) if race_count else 0.0} for k, v in winner_rank_bands.items()},
         "race_results_preview": race_results[:25],
     }
@@ -504,7 +510,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
         simulated_result = _evaluate_grouped_races(grouped, proposed_weights, 0.0, 0, 0.0)
         cm = current_result.get("metrics") or {}
         sm = simulated_result.get("metrics") or {}
-        improvement = {k: round(_to_float(sm.get(k)) - _to_float(cm.get(k)), 2) for k in ["top1_win_strike_rate", "top4_winner_coverage_rate", "each_way_strike_rate", "roughie_strike_rate", "overall_accuracy"]}
+        improvement = {k: round(_to_float(sm.get(k)) - _to_float(cm.get(k)), 2) for k in ["top1_win_strike_rate", "top4_winner_coverage_rate", "top5_winner_coverage_rate", "top5_incremental_gain_vs_top4", "each_way_strike_rate", "roughie_strike_rate", "overall_accuracy"]}
         simulation_id = str(uuid.uuid4())
         response = {
             "success": True,
@@ -520,7 +526,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             "change_amount": change_amount,
             "analysis_only": True,
             "prediction_model_changed": False,
-            "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date, "max_meeting_date": max_meeting_date},
+            "dataset": {"completed_runner_rows": len(rows), "race_count": len(grouped), "min_meeting_date": min_meeting_date or min((row.get("meeting_date") for row in rows if row.get("meeting_date") is not None), default=None), "max_meeting_date": max_meeting_date or max((row.get("meeting_date") for row in rows if row.get("meeting_date") is not None), default=None)},
             "roughie_rules": {"method": "value_ranked_from_meeting_ranks_5_to_20", "thresholds_applied": False, "top_20_framework": True},
             "current_weights": current_weights,
             "test_weights": proposed_weights,
@@ -534,7 +540,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
             ),
             "recommendation": _simulation_recommendation(improvement),
             "notes": notes,
-            "safety_note": "Calibration evidence only. The baseline is loaded from the active PostgreSQL production weight set; this endpoint does not change it.",
+            "safety_note": "Calibration evidence only. Top 5 winner coverage is comparative display-depth analysis; existing Win, Each-Way and Roughie category logic remains unchanged. This endpoint does not change production weights or live prediction behaviour.",
         }
         if save_result:
             response["postgres_history"] = save_weight_simulation(response)

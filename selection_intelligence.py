@@ -169,6 +169,7 @@ def _miss_reason(winner: Dict[str, Any], top4: List[Dict[str, Any]]) -> List[str
 def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     ranked = _rank_race(rows)
     top4 = ranked[:4]
+    top5 = ranked[:5]
     winner = next((item for item in ranked if _to_int(item.get("actual_position")) == 1), None)
 
     if not winner:
@@ -176,6 +177,7 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     winner_rank = _to_int(winner.get("rrt_rank"))
     top4_hit = winner_rank <= 4
+    top5_hit = winner_rank <= 5
     near_miss = 5 <= winner_rank <= 8
     boundary_miss = winner_rank == 5
     false_positives = [item for item in top4 if _to_int(item.get("actual_position"), 999) not in [1, 2, 3]]
@@ -202,6 +204,8 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "actual_price": winner.get("actual_price"),
         },
         "top4_hit": top4_hit,
+        "top5_hit": top5_hit,
+        "rank5_incremental_hit": winner_rank == 5,
         "near_miss": near_miss,
         "boundary_miss": boundary_miss,
         "top20_winner": top20_winner,
@@ -219,6 +223,18 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "actual_position": item.get("actual_position"),
             }
             for item in top4
+        ],
+        "top5": [
+            {
+                "runner": item.get("runner_name"),
+                "tab_number": item.get("tab_number"),
+                "rrt_rank": item.get("rrt_rank"),
+                "final_score": item.get("final_score"),
+                "market_price": item.get("market_price"),
+                "market_rank": item.get("market_rank"),
+                "actual_position": item.get("actual_position"),
+            }
+            for item in top5
         ],
         "false_positive_count": len(false_positives),
         "false_positives": [
@@ -378,6 +394,8 @@ def run_selection_intelligence_analysis(
         race_count = len(race_analyses)
         hit_count = sum(1 for item in race_analyses if item.get("top4_hit"))
         miss_count = race_count - hit_count
+        top5_hit_count = sum(1 for item in race_analyses if item.get("top5_hit"))
+        top5_miss_count = race_count - top5_hit_count
         near_miss_count = sum(1 for item in race_analyses if item.get("near_miss"))
         boundary_miss_count = sum(1 for item in race_analyses if item.get("boundary_miss"))
         top20_winner_count = sum(1 for item in race_analyses if item.get("top20_winner"))
@@ -441,6 +459,13 @@ def run_selection_intelligence_analysis(
                 "top4_miss_count": miss_count,
                 "top4_hit_rate": round((hit_count / race_count) * 100, 2) if race_count else 0.0,
                 "top4_miss_rate": round((miss_count / race_count) * 100, 2) if race_count else 0.0,
+                "top5_hit_count": top5_hit_count,
+                "top5_miss_count": top5_miss_count,
+                "top5_hit_rate": round((top5_hit_count / race_count) * 100, 2) if race_count else 0.0,
+                "top5_miss_rate": round((top5_miss_count / race_count) * 100, 2) if race_count else 0.0,
+                "rank5_incremental_winners": boundary_miss_count,
+                "rank5_incremental_coverage_rate": round((boundary_miss_count / race_count) * 100, 2) if race_count else 0.0,
+                "top5_incremental_gain_vs_top4": round(((top5_hit_count - hit_count) / race_count) * 100, 2) if race_count else 0.0,
                 "near_miss_count": near_miss_count,
                 "boundary_miss_count": boundary_miss_count,
                 "near_miss_rate": round((near_miss_count / race_count) * 100, 2) if race_count else 0.0,
@@ -461,7 +486,7 @@ def run_selection_intelligence_analysis(
             "factor_gap_rollup": factor_gap_rollup,
             "recommendations": recommendations,
             "top_misses": top_misses,
-            "safety_note": "Selection intelligence is analysis-only. No production scoring weights or live prediction behaviour have been changed.",
+            "safety_note": "Selection intelligence is analysis-only. Top 5 metrics are comparative display-depth analysis only; no production category logic, scoring weights or live prediction behaviour have been changed.",
         }
         if save_result:
             response["postgres_history"] = save_selection_analysis(response)
@@ -597,6 +622,14 @@ def get_category_analysis() -> Dict[str, Any]:
         "report": "category_analysis",
         "analysis_only": True,
         "categories": {
+            "top5_display_baseline": {
+                "top4_hit_count": summary.get("top4_hit_count"),
+                "top4_hit_rate": summary.get("top4_hit_rate"),
+                "top5_hit_count": summary.get("top5_hit_count"),
+                "top5_hit_rate": summary.get("top5_hit_rate"),
+                "rank5_incremental_winners": summary.get("rank5_incremental_winners"),
+                "top5_incremental_gain_vs_top4": summary.get("top5_incremental_gain_vs_top4"),
+            },
             "top4_boundary": {
                 "near_miss_count": summary.get("near_miss_count"),
                 "near_miss_rate": summary.get("near_miss_rate"),
