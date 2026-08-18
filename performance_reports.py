@@ -1522,6 +1522,14 @@ def generate_learning_report_html() -> str:
     h2h = report.get("head_to_head") or {}
     tracks = report.get("track_sets") or {}
     dates = report.get("date_sets") or {}
+
+    # get_latest_selection_analysis() can return either a saved-analysis wrapper
+    # or a freshly regenerated analysis. Normalise both shapes for HTML only.
+    selection_response = report.get("selection_intelligence") or {}
+    selection_analysis = selection_response.get("analysis") or selection_response
+    selection_summary = selection_analysis.get("summary") or {}
+    selection_recommendations = selection_analysis.get("recommendations") or []
+
     ready = "READY" if status.get("ready_for_learning") else "NOT READY"
     def card(label: str, value: Any) -> str:
         return f'<div class="card"><div class="label">{escape(label)}</div><div class="value">{escape(str(value))}</div></div>'
@@ -1533,8 +1541,10 @@ def generate_learning_report_html() -> str:
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: automatic weight changes disabled</span>',
         '<h2>Dataset Audit</h2><div class="grid">',
         card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
-        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
+        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))),
+        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', 'Pending history'), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
         '</div>',
+        '<div class="note"><strong>Trifecta:</strong> Placeholder only. Best Box Trifecta result history is not yet stored as a meeting-level performance metric; no strike rate is being reported at this stage.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
@@ -1573,15 +1583,15 @@ def generate_learning_report_html() -> str:
         '<h2>Selection Intelligence</h2>',
         '<div class="note">Selection Intelligence v2.22.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
         _html_table(['Metric','Value'], [
-            ['Top 4 Hit Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('top4_hit_rate')],
-            ['Near Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('near_miss_rate')],
-            ['Boundary Miss Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('boundary_miss_rate')],
-            ['Roughie-like Winner Rate', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('roughie_like_winner_rate')],
-            ['Average False Positives / Race', (((report.get('selection_intelligence') or {}).get('analysis') or {}).get('summary') or {}).get('avg_false_positives_per_race')]
+            ['Top 4 Hit Rate', selection_summary.get('top4_hit_rate')],
+            ['Near Miss Rate', selection_summary.get('near_miss_rate')],
+            ['Boundary Miss Rate', selection_summary.get('boundary_miss_rate')],
+            ['Roughie-like Winner Rate', selection_summary.get('roughie_like_winner_rate')],
+            ['Average False Positives / Race', selection_summary.get('avg_false_positives_per_race')]
         ]),
         _html_table(['Priority','Area','Recommendation','Evidence'], [
             [i.get('priority'), i.get('area'), i.get('recommendation'), i.get('evidence')]
-            for i in ((((report.get('selection_intelligence') or {}).get('analysis') or {}).get('recommendations') or [])[:8])
+            for i in selection_recommendations[:8]
         ]),
         '<h2>Normalised Speed Rating</h2>',
         '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight remains active at 10% in the current production weight set while live monitoring continues.</p>',
@@ -1640,7 +1650,24 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(Spacer(1, 10))
     story.append(Paragraph(f"Status: {'READY' if status.get('ready_for_learning') else 'NOT READY'} | Confidence: {status.get('confidence')} | Adaptive Control: {'live promotion authorised' if report.get('automatic_weight_changes_enabled') else 'shadow evaluation only'}", styles["BodyText"]))
     story.append(Paragraph("Dataset Audit", styles["RRTHeading"]))
-    story.append(t(["Metric","Value"], [["Meetings analysed",dataset.get('meeting_count')],["Races analysed",dataset.get('race_count')],["Unique tracks",dataset.get('unique_tracks')],["Unique dates",dataset.get('unique_dates')],["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],["Database schema",DATABASE_SCHEMA_VERSION],["Prediction model",MODEL_VERSION]], [7*cm,9*cm]))
+    story.append(t(["Metric","Value"], [
+        ["Meetings analysed",dataset.get('meeting_count')],
+        ["Races analysed",dataset.get('race_count')],
+        ["Unique tracks",dataset.get('unique_tracks')],
+        ["Unique dates",dataset.get('unique_dates')],
+        ["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],
+        ["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],
+        ["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],
+        ["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],
+        ["Double",_pct(dataset.get('avg_double_strike_rate'))],
+        ["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],
+        ["Trifecta","Pending history"],
+        ["RRT v PF AI",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],
+        ["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],
+        ["Database schema",DATABASE_SCHEMA_VERSION],
+        ["Prediction model",MODEL_VERSION]
+    ], [7*cm,9*cm]))
+    story.append(Paragraph("Trifecta is a placeholder only. Best Box Trifecta result history is not yet stored as a meeting-level performance metric; no strike rate is being reported at this stage.", styles["BodyText"]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
     story.append(Paragraph("Current Model Performance", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["PF AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / PF AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
