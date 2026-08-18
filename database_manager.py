@@ -511,8 +511,8 @@ def init_postgres_schema() -> Dict[str, Any]:
                 active = EXCLUDED.active;
             """,
             (
-                "2.21.0",
-                "RRT Predictor v2.21.0 Historical Profile Intelligence and automatic Punting Form cache.",
+                "2.22.0",
+                "RRT Predictor v2.22.0 Top 5 output, autonomous adaptive control and Promotion Controller release.",
                 True,
             ),
         )
