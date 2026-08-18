@@ -1478,8 +1478,7 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
         "leading_candidate_weight": leading.get("new_weight"),
         "recommended_calibration_range": "Active at 10%; continue monitoring new v2.22.0 results",
         "production_status": "Active at 10% in the current production weight set; continue live out-of-sample monitoring.",
-        "automatic_weight_changes_enabled": bool(promotion_status.get("automatic_weight_changes_enabled")),
-            "promotion_mode": promotion_status.get("promotion_mode"),
+        "automatic_weight_changes_enabled": False,
         "simulations": speed_simulations,
     }
 
