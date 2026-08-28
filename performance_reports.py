@@ -1356,7 +1356,7 @@ def get_each_way_leaderboards(
             "success": True,
             "provider": "PostgreSQL",
             "report": "rolling_historical_performance_leaderboards",
-            "leaderboard_version": "2.22.0",
+            "leaderboard_version": REPORT_VERSION,
             "generated_at": _now_utc_iso(),
             "minimum_samples": {
                 "trainers": max(int(min_runners), MIN_TRAINER_RUNNERS),
@@ -1380,7 +1380,7 @@ def get_each_way_leaderboards(
             "success": False,
             "provider": "PostgreSQL",
             "report": "rolling_historical_performance_leaderboards",
-            "leaderboard_version": "2.22.0",
+            "leaderboard_version": REPORT_VERSION,
             "error": str(error),
         }
 
@@ -1445,6 +1445,22 @@ def _html_table(headers: List[str], rows: List[List[Any]]) -> str:
     for row in rows:
         trs.append("<tr>" + "".join(f"<td>{escape(str(c if c is not None else ''))}</td>" for c in row) + "</tr>")
     return "<table><thead><tr>" + th + "</tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
+
+
+def _analysis_metric_rows(payload: Any, prefix: str = "", depth: int = 0) -> List[List[Any]]:
+    """Flatten analysis-only response dictionaries for compact HTML display."""
+    rows: List[List[Any]] = []
+    if not isinstance(payload, dict):
+        return rows
+    for key, value in payload.items():
+        label = f"{prefix}{key}".replace("_", " ").strip().title()
+        if isinstance(value, dict) and depth < 2:
+            rows.extend(_analysis_metric_rows(value, prefix=f"{label} — ", depth=depth + 1))
+        elif isinstance(value, list):
+            rows.append([label, f"{len(value)} records"])
+        elif value is not None:
+            rows.append([label, value])
+    return rows
 
 
 def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simulations: Dict[str, Any]) -> Dict[str, Any]:
@@ -1520,8 +1536,8 @@ def get_speed_rating_report() -> Dict[str, Any]:
             ROUND(AVG(speed_score) FILTER(WHERE actual_position BETWEEN 1 AND 3),2) AS placed_average,
             ROUND(AVG(speed_score) FILTER(WHERE actual_position>3),2) AS unplaced_average,COUNT(*) FILTER(WHERE speed_score IS NOT NULL) AS analysed_rows
             FROM rrt_runner_factor_snapshots WHERE actual_position IS NOT NULL;""") or {}
-        return {"success":True,"speed_version":"2.22.0","analysis_only":True,"totals":totals,"outcome":outcome,"in_run_used":False}
-    except Exception as e: return {"success":False,"speed_version":"2.22.0","error":str(e)}
+        return {"success":True,"speed_version":REPORT_VERSION,"analysis_only":True,"totals":totals,"outcome":outcome,"in_run_used":False}
+    except Exception as e: return {"success":False,"speed_version":REPORT_VERSION,"error":str(e)}
 
 
 def generate_learning_report_html() -> str:
@@ -1588,6 +1604,15 @@ def generate_learning_report_html() -> str:
         _html_table(['Factor','Current','Recommended','Change','Direction','Priority','Reason'], [[i.get('label'),i.get('current_weight'),i.get('recommended_weight'),i.get('change'),i.get('direction'),i.get('priority'),i.get('reason')] for i in ((report.get('weight_recommendations') or {}).get('recommendations') or [])[:13]]),
         '<h3>Model Health</h3>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
+        '<h2>Freshness / First-Up Analysis</h2>',
+        '<div class="note">Analysis-only evidence. Freshness / first-up information is currently monitored at 0% production weight and cannot directly alter production predictions.</div>',
+        _html_table(['Metric','Value'], _analysis_metric_rows(report.get('freshness_first_up') or {})),
+        '<h2>Track Condition Audit</h2>',
+        '<div class="note">Audit of the existing Track Condition factor against completed runner outcomes. This section does not alter the current Track Condition production weight.</div>',
+        _html_table(['Metric','Value'], _analysis_metric_rows(report.get('track_condition_audit') or {})),
+        '<h2>No-Market Historical Comparison</h2>',
+        '<div class="note">Analysis-only replay with Market removed and the remaining production factors proportionally normalised. Production weights are not changed.</div>',
+        _html_table(['Metric','Value'], _analysis_metric_rows(report.get('no_market_comparison') or {})),
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
@@ -1687,9 +1712,9 @@ def generate_learning_report_pdf_bytes() -> bytes:
         story.append(Paragraph(title, styles["RRTHeading"])); story.append(t(["Area","Priority","Metric","Evidence"], rows, [3.5*cm,2.2*cm,2.2*cm,8.5*cm]))
     story.append(PageBreak())
     story.append(Paragraph("Priority Action Plan", styles["RRTHeading"])); story.append(t(["Priority","Action","Reason","Next Step"], [[i.get('priority'),i.get('action'),i.get('reason'),i.get('next_step')] for i in report.get('priority_action_plan') or []], [2.2*cm,3.8*cm,5*cm,5.6*cm]))
-    story.append(Paragraph("Strongest Tracks*", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]))
-    story.append(Paragraph("Weakest Tracks*", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]))
-    story.append(Paragraph("Recent Daily Performance", styles["RRTHeading"])); story.append(t(["Date","Meetings","Races","Accuracy","RRT v PF AI"], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]))
+    story.append(Paragraph("Strongest Tracks*", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v Race Data AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]))
+    story.append(Paragraph("Weakest Tracks*", styles["RRTHeading"])); story.append(t(["Track","Meetings","Races","Accuracy","RRT v Race Data AI"], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]))
+    story.append(Paragraph("Recent Daily Performance", styles["RRTHeading"])); story.append(t(["Date","Meetings","Races","Accuracy","RRT v Race Data AI"], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]))
 
     leaderboards = report.get("each_way_leaderboards") or {}
     story.append(PageBreak())
@@ -1741,7 +1766,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
     doc.build(story); buffer.seek(0); return buffer.getvalue()
 
 # ---------------------------------------------------------------------
-# v2.22.0 RRT Predictor Systems Report
+# v2.22.1 RRT Predictor Systems Report
 # ---------------------------------------------------------------------
 
 def get_systems_report() -> Dict[str, Any]:
@@ -1798,11 +1823,11 @@ def get_systems_report() -> Dict[str, Any]:
             "success": True,
             "provider": "PostgreSQL",
             "report": "rrt_predictor_systems_report",
-            "report_version": "2.22.0",
+            "report_version": REPORT_VERSION,
             "generated_at": _now_utc_iso(),
             "release": {
-                "backend_version": "2.22.0",
-                "model_release": "2.22.0",
+                "backend_version": REPORT_VERSION,
+                "model_release": MODEL_VERSION,
                 "database_schema_version": "2.21.0",
                 "production_weight_set": active.get("model_version"),
                 "promotion_controller_mode": promotion.get("promotion_mode"),
@@ -1834,14 +1859,14 @@ def get_systems_report() -> Dict[str, Any]:
                 "automatic_live_promotion": promotion.get("automatic_weight_changes_enabled"),
                 "production_weights_changed_by_report": False,
             },
-            "next_phase": "v2.22.0 autonomous learning path validated. Authorise live promotion mode only after final release checks; future production changes remain subject to all Promotion Controller gates.",
+            "next_phase": "v2.22.1 autonomous learning is LIVE and validated. Continue unattended results processing, adaptive candidate evaluation and Promotion Controller gating; future production weight changes remain subject to all configured safety gates.",
         }
     except Exception as error:
         return {
             "success": False,
             "provider": "PostgreSQL",
             "report": "rrt_predictor_systems_report",
-            "report_version": "2.22.0",
+            "report_version": REPORT_VERSION,
             "error": str(error),
         }
 
@@ -1860,7 +1885,7 @@ def generate_systems_report_html() -> str:
         for k, v in counts.items()
     )
     return f"""
-    <html><head><title>RRT Predictor Systems Report v2.22.0</title>
+    <html><head><title>RRT Predictor Systems Report v2.22.1</title>
     <style>body{{font-family:Arial,sans-serif;margin:32px;color:#222}}table{{border-collapse:collapse;width:100%;margin:12px 0 24px}}td,th{{border:1px solid #bbb;padding:8px;text-align:left}}th{{background:#eee}}.ok{{color:#087830;font-weight:bold}}</style></head>
     <body><h1>RRT Predictor Systems Report</h1>
     <p><strong>Generated:</strong> {escape(str(report.get('generated_at')))}</p>
