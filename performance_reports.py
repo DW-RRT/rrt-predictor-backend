@@ -6,18 +6,18 @@ import re
 
 from database import fetch_all, fetch_one
 
-from factor_analysis import get_factor_effectiveness_report, get_model_health_report
+from factor_analysis import get_factor_effectiveness_report, get_model_health_report, get_freshness_first_up_analysis, get_track_condition_audit
 from adaptive_weight_recommendations import get_weight_recommendations
-from simulator_engine import get_best_simulations, get_simulation_history
+from simulator_engine import get_best_simulations, get_simulation_history, run_no_market_comparison
 from selection_intelligence import get_latest_selection_analysis
 from profile_cache_engine import get_historical_horse_leaderboard, get_strike_rate_leaderboard, get_profile_cache_summary
 
 
-REPORT_VERSION = "2.22.0"
-ANALYTICS_VERSION = "2.22.0"
+REPORT_VERSION = "2.22.1"
+ANALYTICS_VERSION = "2.22.1"
 DATABASE_SCHEMA_VERSION = "2.21.0"
-MODEL_VERSION = "2.22.0"
-LEARNING_VERSION = "2.22.0"
+MODEL_VERSION = "2.22.1"
+LEARNING_VERSION = "2.22.1"
 
 
 
@@ -168,6 +168,7 @@ def get_overall_performance_report() -> Dict[str, Any]:
                 ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
                 ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
                 ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
                 ROUND(AVG(top_win_strike_rate - pf_ai_top_win_strike_rate), 2) AS avg_rrt_vs_pf_ai_gap
             FROM rrt_performance_snapshots;
             """
@@ -226,7 +227,8 @@ def get_track_performance_report() -> Dict[str, Any]:
                 ROUND(AVG(roughie_strike_rate), 2) AS avg_roughie_strike_rate,
                 ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
                 ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
-                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate
+                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate
             FROM rrt_performance_snapshots
             WHERE track IS NOT NULL
             GROUP BY track
@@ -399,7 +401,8 @@ def get_daily_performance_report() -> Dict[str, Any]:
                 ROUND(AVG(overall_accuracy), 2) AS avg_overall_accuracy,
                 ROUND(AVG(top_win_strike_rate), 2) AS avg_top_win_strike_rate,
                 ROUND(AVG(each_way_strike_rate), 2) AS avg_each_way_strike_rate,
-                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate
+                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate
             FROM rrt_performance_snapshots
             GROUP BY meeting_date
             ORDER BY meeting_date DESC;
@@ -435,7 +438,8 @@ def get_model_version_report() -> Dict[str, Any]:
                 ROUND(AVG(overall_accuracy), 2) AS avg_overall_accuracy,
                 ROUND(AVG(top_win_strike_rate), 2) AS avg_top_win_strike_rate,
                 ROUND(AVG(each_way_strike_rate), 2) AS avg_each_way_strike_rate,
-                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate
+                ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate
             FROM rrt_performance_snapshots
             GROUP BY model_version
             ORDER BY model_version DESC;
@@ -485,6 +489,7 @@ def get_analytics_summary() -> Dict[str, Any]:
                 ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
                 ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
                 ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
                 ROUND(AVG(top_win_strike_rate - pf_ai_top_win_strike_rate), 2) AS avg_rrt_vs_pf_ai_gap
             FROM rrt_performance_snapshots;
             """
@@ -576,6 +581,7 @@ def get_analytics_by_track(min_meetings: int = 1, limit: int = 100) -> Dict[str,
                 ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
                 ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
                 ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
                 ROUND(AVG(top_win_strike_rate - pf_ai_top_win_strike_rate), 2) AS avg_rrt_vs_pf_ai_gap
             FROM rrt_performance_snapshots
             WHERE track IS NOT NULL
@@ -634,6 +640,7 @@ def get_analytics_by_date(limit: int = 60) -> Dict[str, Any]:
                 ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
                 ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
                 ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
                 ROUND(AVG(top_win_strike_rate - pf_ai_top_win_strike_rate), 2) AS avg_rrt_vs_pf_ai_gap
             FROM rrt_performance_snapshots
             GROUP BY meeting_date
@@ -916,6 +923,7 @@ def _learning_summary_sql() -> str:
             ROUND(AVG(double_strike_rate), 2) AS avg_double_strike_rate,
             ROUND(AVG(quaddie_strike_rate), 2) AS avg_quaddie_strike_rate,
             ROUND(AVG(pf_ai_top_win_strike_rate), 2) AS avg_pf_ai_top_win_strike_rate,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
             ROUND(AVG(top_win_strike_rate - pf_ai_top_win_strike_rate), 2) AS avg_rrt_vs_pf_ai_gap
         FROM rrt_performance_snapshots;
     """
@@ -1413,6 +1421,9 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "historical_jockeys": get_strike_rate_leaderboard("jockey", limit=20, min_starts=100, period="last100"),
             "factor_effectiveness": factor_effectiveness,
             "weight_recommendations": weight_recommendations,
+            "freshness_first_up": get_freshness_first_up_analysis(),
+            "track_condition_audit": get_track_condition_audit(),
+            "no_market_comparison": run_no_market_comparison(),
             "model_health": get_model_health_report(),
             "simulation_history": get_simulation_history(limit=10),
             "best_simulations": best_simulations,
@@ -1542,9 +1553,9 @@ def generate_learning_report_html() -> str:
         '<h2>Dataset Audit</h2><div class="grid">',
         card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
         card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))),
-        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', 'Pending history'), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
+        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
         '</div>',
-        '<div class="note"><strong>Trifecta:</strong> Placeholder only. Best Box Trifecta result history is not yet stored as a meeting-level performance metric; no strike rate is being reported at this stage.</div>',
+        '<div class="note"><strong>Trifecta:</strong> v2.22.1 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
@@ -1662,13 +1673,13 @@ def generate_learning_report_pdf_bytes() -> bytes:
         ["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],
         ["Double",_pct(dataset.get('avg_double_strike_rate'))],
         ["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],
-        ["Trifecta","Pending history"],
+        ["Trifecta",_pct(dataset.get("avg_trifecta_strike_rate")) if dataset.get("avg_trifecta_strike_rate") is not None else "Pending history"],
         ["RRT v PF AI",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],
         ["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],
         ["Database schema",DATABASE_SCHEMA_VERSION],
         ["Prediction model",MODEL_VERSION]
     ], [7*cm,9*cm]))
-    story.append(Paragraph("Trifecta is a placeholder only. Best Box Trifecta result history is not yet stored as a meeting-level performance metric; no strike rate is being reported at this stage.", styles["BodyText"]))
+    story.append(Paragraph("Trifecta v2.22.1 result history is stored at meeting level. A hit requires all official first three finishers to be contained in the selected five-runner box.", styles["BodyText"]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
     story.append(Paragraph("Current Model Performance", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["PF AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / PF AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))

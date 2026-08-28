@@ -90,12 +90,15 @@ def init_postgres_schema() -> Dict[str, Any]:
                 double_strike_rate NUMERIC(6,2),
                 quaddie_strike_rate NUMERIC(6,2),
                 pf_ai_top_win_strike_rate NUMERIC(6,2),
+                trifecta_strike_rate NUMERIC(6,2),
                 performance_json JSONB NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             """
         )
 
+
+        execute_sql("ALTER TABLE rrt_performance_snapshots ADD COLUMN IF NOT EXISTS trifecta_strike_rate NUMERIC(6,2);")
 
         execute_sql(
             """
@@ -758,7 +761,7 @@ def save_prediction_snapshot(prediction_snapshot: Dict[str, Any]) -> Dict[str, A
                 runner_count,
                 prediction_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (meeting_id, model_version)
             DO UPDATE SET
                 prediction_type = EXCLUDED.prediction_type,
@@ -965,9 +968,10 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
                 double_strike_rate,
                 quaddie_strike_rate,
                 pf_ai_top_win_strike_rate,
+                trifecta_strike_rate,
                 performance_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (meeting_id, model_version)
             DO UPDATE SET
                 track = EXCLUDED.track,
@@ -979,6 +983,7 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
                 double_strike_rate = EXCLUDED.double_strike_rate,
                 quaddie_strike_rate = EXCLUDED.quaddie_strike_rate,
                 pf_ai_top_win_strike_rate = EXCLUDED.pf_ai_top_win_strike_rate,
+                trifecta_strike_rate = EXCLUDED.trifecta_strike_rate,
                 performance_json = EXCLUDED.performance_json,
                 created_at = NOW();
             """,
@@ -994,6 +999,7 @@ def save_performance_snapshot(performance_snapshot: Dict[str, Any]) -> Dict[str,
                 (accuracy.get("best_double") or {}).get("strike_rate"),
                 (accuracy.get("best_quaddie") or {}).get("strike_rate"),
                 pf_ai_top_win.get("strike_rate"),
+                (accuracy.get("best_box_trifecta") or {}).get("strike_rate"),
                 json.dumps(performance_snapshot, default=str),
             ),
         )

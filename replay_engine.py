@@ -5,8 +5,8 @@ import uuid
 
 from database import execute_sql, fetch_all, fetch_one
 
-REPLAY_VERSION = "2.22.0"
-MODEL_VERSION = "2.22.0"
+REPLAY_VERSION = "2.22.1"
+MODEL_VERSION = "2.22.1"
 
 ROLLBACK_WEIGHTS: Dict[str, float] = {
     "last10": 0.15,
@@ -162,7 +162,7 @@ def _metrics(groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]], score_key: str
         roughie_hit = False
         if roughies:
             roughie_races += 1
-            roughie_hit = any(int(_float(r.get("actual_position"), 999)) == 1 for r in roughies)
+            roughie_hit = any(1 <= int(_float(r.get("actual_position"), 999)) <= 3 for r in roughies)
             roughie_hits += int(roughie_hit)
         selections.append({
             "meeting_id": key[0], "race_number": ranked[0].get("race_number"), "track": ranked[0].get("track"),
