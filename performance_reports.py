@@ -901,7 +901,7 @@ def _metric_label(metric: Any) -> str:
         "roughie": "Roughie",
         "double": "Double",
         "quaddie": "Quadrella",
-        "pf_ai_top_win": "PF AI Top Win",
+        "pf_ai_top_win": "Race Data AI Top Win",
     }.get(str(metric or ""), str(metric or "N/A"))
 
 
@@ -1034,10 +1034,10 @@ def _learning_strengths(base: Dict[str, Any], tracks: Dict[str, Any], dates: Dic
     }]
     if _to_float(summary.get("avg_rrt_vs_pf_ai_gap")) > 0:
         rows.append({
-            "area": "RRT vs PF AI",
+            "area": "RRT vs Race Data AI",
             "metric_value": summary.get("avg_rrt_vs_pf_ai_gap"),
             "priority": "Maintain",
-            "evidence": f"RRT is ahead of PF AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}, with {h2h.get('rrt_wins')} RRT wins versus {h2h.get('pf_ai_wins')} PF AI wins.",
+            "evidence": f"RRT is ahead of Race Data AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}, with {h2h.get('rrt_wins')} RRT wins versus {h2h.get('pf_ai_wins')} Race Data AI wins.",
         })
     reliable = tracks.get("reliable_tracks") or []
     if reliable:
@@ -1088,9 +1088,9 @@ def _learning_actions(base: Dict[str, Any]) -> List[Dict[str, Any]]:
     if _to_float(summary.get("avg_roughie_strike_rate")) < 20:
         actions.append({"priority": "High", "action": "Improve roughie selection logic", "reason": f"Roughie strike rate is {_pct(summary.get('avg_roughie_strike_rate'))}, materially below other categories.", "next_step": "Use the v2.13.0 automatic results processor to keep factor data current, then compare roughie candidates against completed result outcomes."})
     if _to_float(summary.get("avg_top_win_strike_rate")) < 35:
-        actions.append({"priority": "High", "action": "Review top-win ranking precision", "reason": f"Top-win strike rate is {_pct(summary.get('avg_top_win_strike_rate'))}.", "next_step": "Compare top-win selections against PF AI, winner price bands, track condition, and field size once factor capture is available."})
+        actions.append({"priority": "High", "action": "Review top-win ranking precision", "reason": f"Top-win strike rate is {_pct(summary.get('avg_top_win_strike_rate'))}.", "next_step": "Compare top-win selections against Race Data AI, winner price bands, track condition, and field size once factor capture is available."})
     if _to_float(summary.get("avg_rrt_vs_pf_ai_gap")) > 0:
-        actions.append({"priority": "Medium", "action": "Protect current RRT advantage over PF AI", "reason": f"RRT is currently ahead of PF AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}.", "next_step": "Any future adaptive weighting should be tested against this baseline before production."})
+        actions.append({"priority": "Medium", "action": "Protect current RRT advantage over Race Data AI", "reason": f"RRT is currently ahead of PF AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}.", "next_step": "Any future adaptive weighting should be tested against this baseline before production."})
     if base.get("ready_for_learning"):
         actions.append({"priority": "Medium", "action": "Review factor-capture dataset", "reason": "Dataset is large enough for learning analysis and v2.13.0 now automatically updates runner-level scoring factors after results are processed.", "next_step": "Collect completed meetings with factor rows and compare winning runners against each scoring component before recommending specific weight changes."})
     return actions
@@ -1430,7 +1430,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "selection_intelligence": get_latest_selection_analysis(),
             "speed_calibration": speed_calibration,
             "safety_note": (
-                f"This v2.22.0 report reflects the active PostgreSQL production weight set, including Normalised Speed at 10%. "
+                f"This v2.22.1 report reflects the active PostgreSQL production weight set, including Normalised Speed at 10%. "
                 f"Promotion Controller mode is {promotion_status.get('promotion_mode')}. "
                 "Recommendations do not directly change production weights; only an authorised Promotion Controller decision can apply a candidate."
             ),
@@ -1487,7 +1487,7 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
         "production_weight": 10.0,
         "tested_range": f"{min(tested_weights):g}% to {max(tested_weights):g}%" if tested_weights else "Not available",
         "leading_candidate_weight": leading.get("new_weight"),
-        "recommended_calibration_range": "Active at 10%; continue monitoring new v2.22.0 results",
+        "recommended_calibration_range": "Active at 10%; continue monitoring new v2.22.1 results",
         "production_status": "Active at 10% in the current production weight set; continue live out-of-sample monitoring.",
         "automatic_weight_changes_enabled": False,
         "simulations": speed_simulations,
@@ -1553,7 +1553,7 @@ def generate_learning_report_html() -> str:
         '<h2>Dataset Audit</h2><div class="grid">',
         card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
         card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))),
-        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'), card('RRT v PF AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
+        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'), card('RRT v Race Data AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
         '</div>',
         '<div class="note"><strong>Trifecta:</strong> v2.22.1 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
@@ -1562,9 +1562,9 @@ def generate_learning_report_html() -> str:
         '<h2>Strengths</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]),
         '<h2>Weaknesses</h2>', _html_table(['Area','Priority','Metric','Evidence'], [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('weaknesses') or []]),
         '<h2>Priority Action Plan</h2>', _html_table(['Priority','Action','Reason','Next Step'], [[i.get('priority'),i.get('action'),i.get('reason'),i.get('next_step')] for i in report.get('priority_action_plan') or []]),
-        '<h2>Strongest Tracks*</h2><div class="note">Track tables require at least 3 recorded RRT prediction meetings per track.</div>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
-        '<h2>Weakest Tracks*</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
-        '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v PF AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
+        '<h2>Strongest Tracks*</h2><div class="note">Track tables require at least 3 recorded RRT prediction meetings per track.</div>', _html_table(['Track','Meetings','Races','Accuracy','RRT v Race Data AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('strong_tracks') or [])[:10]]),
+        '<h2>Weakest Tracks*</h2>', _html_table(['Track','Meetings','Races','Accuracy','RRT v Race Data AI'], [[i.get('track'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (tracks.get('review_tracks') or [])[:10]]),
+        '<h2>Recent Daily Performance</h2>', _html_table(['Date','Meetings','Races','Accuracy','RRT v Race Data AI'], [[i.get('meeting_date'),i.get('meeting_count'),i.get('race_count'),_pct(i.get('avg_overall_accuracy')),_pct(i.get('avg_rrt_vs_pf_ai_gap'))] for i in (dates.get('recent_days') or [])[:10]]),
         '<h2>Rolling Historical Performance Leaderboards — RRT Prediction Runs Only</h2>',
         '<div class="note">Meeting-level performance covers archived RRT prediction meetings. Runner-level leaderboards cover the subset where pre-race RRT runner-factor records and official finishing positions were both stored. This subset grows automatically through native full-field capture.</div>',
         _html_table(['Coverage Metric','Value'], [['Archived Prediction Meetings', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('prediction_meeting_count')], ['Runner-Factor Meetings', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('meeting_count')], ['Completed Runner Rows', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('completed_runner_rows')], ['Completed Runner-Factor Races', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('race_count')], ['Unique Tracks', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('track_count')], ['Unique Racing Dates', ((report.get('each_way_leaderboards') or {}).get('dataset') or {}).get('date_count')]]),
@@ -1575,13 +1575,13 @@ def generate_learning_report_html() -> str:
         '<h3>Top 20 Historical Horse Performance</h3>',
         '<div class="note">Aggregated historical performance across distinct actual race starts. Repeated model-version snapshots for the same horse and race are counted once. The Trainer shown is from the latest completed recorded start. This table is separate from the per-meeting Top 20 prediction ranking. Emerging = 2-4 completed runs; Established = 5 or more completed runs.</div>',
         (_html_table(['Rank','Horse','Trainer','Status','Runs','Wins','Places','Win %','Place %','Avg Score','Avg Confidence'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('evidence_status'),i.get('runner_count'),i.get('win_count'),i.get('place_count'),_pct(i.get('win_strike_rate')),_pct(i.get('place_strike_rate')),i.get('avg_final_score'),i.get('avg_confidence')] for i in ((report.get('each_way_leaderboards') or {}).get('top_horses') or [])[:20]]) if ((report.get('each_way_leaderboards') or {}).get('top_horses') or []) else '<div class="note">Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.</div>'),
-        '<h2>Historical Profile Intelligence — Punting Form</h2>',
-        '<div class="note">Independent of RRT Predictions. Horse profiles use /v2/form/form; trainer and jockey profiles use /v2/form/strikerate. RRT-observed leaderboards remain available separately.</div>',
-        '<h3>Top 20 Historical Horse Performance</h3>', (_html_table(['Rank','Horse','Trainer','Starts','Wins','Places','Win %','Place %','Last 10'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last10')] for i in ((report.get('historical_horses') or {}).get('horses') or [])]) if ((report.get('historical_horses') or {}).get('horses') or []) else '<div class="note">No Punting Form horse profiles cached yet. Run /api/profiles/refresh-meeting.</div>'),
+        '<h2>Historical Profile Intelligence — Race Data Source</h2>',
+        '<div class="note">Independent of RRT Predictions. Historical horse, trainer and jockey profiles are sourced from the connected Race Data Source. RRT-observed leaderboards remain available separately.</div>',
+        '<h3>Top 20 Historical Horse Performance</h3>', (_html_table(['Rank','Horse','Trainer','Starts','Wins','Places','Win %','Place %','Last 10'], [[i.get('rank'),i.get('horse'),i.get('trainer'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last10')] for i in ((report.get('historical_horses') or {}).get('horses') or [])]) if ((report.get('historical_horses') or {}).get('horses') or []) else '<div class="note">No Race Data Source horse profiles cached yet. Run /api/profiles/refresh-meeting.</div>'),
         '<h3>Top 20 Trainer Strike Rate — Last 100</h3>', (_html_table(['Rank','Trainer','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_trainers') or {}).get('profiles') or [])]) if ((report.get('historical_trainers') or {}).get('profiles') or []) else '<div class="note">No trainer strike-rate profiles cached yet.</div>'),
         '<h3>Top 20 Jockey Strike Rate — Last 100</h3>', (_html_table(['Rank','Jockey','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_jockeys') or {}).get('profiles') or [])]) if ((report.get('historical_jockeys') or {}).get('profiles') or []) else '<div class="note">No jockey strike-rate profiles cached yet.</div>'),
         '<h2>Evidence-Based Factor Analysis</h2>',
-        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.0 Promotion Controller when its configured gates and operating mode authorise promotion.</div>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.1 Promotion Controller when its configured gates and operating mode authorise promotion.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
         _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:13]]),
         '<h3>Future Adaptive Weight Proposals</h3>',
@@ -1592,7 +1592,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">Selection Intelligence v2.22.0 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
+        '<div class="note">Selection Intelligence v2.22.1 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
         _html_table(['Metric','Value'], [
             ['Top 4 Hit Rate', selection_summary.get('top4_hit_rate')],
             ['Near Miss Rate', selection_summary.get('near_miss_rate')],
@@ -1674,7 +1674,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
         ["Double",_pct(dataset.get('avg_double_strike_rate'))],
         ["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],
         ["Trifecta",_pct(dataset.get("avg_trifecta_strike_rate")) if dataset.get("avg_trifecta_strike_rate") is not None else "Pending history"],
-        ["RRT v PF AI",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],
+        ["RRT v Race Data AI",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],
         ["Date range",f"{dataset.get('first_meeting_date')} to {dataset.get('latest_meeting_date')}"],
         ["Database schema",DATABASE_SCHEMA_VERSION],
         ["Prediction model",MODEL_VERSION]
@@ -1682,7 +1682,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
     story.append(Paragraph("Trifecta v2.22.1 result history is stored at meeting level. A hit requires all official first three finishers to be contained in the selected five-runner box.", styles["BodyText"]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
     story.append(Paragraph("Current Model Performance", styles["RRTHeading"]))
-    story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["PF AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / PF AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
+    story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["Race Data AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / Race Data AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
     for title, rows in [("Strengths", [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('strengths') or []]), ("Weaknesses", [[i.get('area'),i.get('priority'),_pct(i.get('metric_value')) if i.get('metric_value') is not None else '',i.get('evidence')] for i in report.get('weaknesses') or []])]:
         story.append(Paragraph(title, styles["RRTHeading"])); story.append(t(["Area","Priority","Metric","Evidence"], rows, [3.5*cm,2.2*cm,2.2*cm,8.5*cm]))
     story.append(PageBreak())
@@ -1715,8 +1715,8 @@ def generate_learning_report_pdf_bytes() -> bytes:
     else:
         story.append(Paragraph("Insufficient historical horse performance data available. A minimum of two distinct completed starts is required before inclusion.", styles["BodyText"]))
     story.append(PageBreak())
-    story.append(Paragraph("Historical Profile Intelligence — Punting Form", styles["RRTHeading"]))
-    story.append(Paragraph("Independent of RRT Predictions. Horse profiles use /v2/form/form; trainer and jockey profiles use /v2/form/strikerate.", styles["BodyText"]))
+    story.append(Paragraph("Historical Profile Intelligence — Race Data Source", styles["RRTHeading"]))
+    story.append(Paragraph("Independent of RRT Predictions. Historical horse, trainer and jockey profiles are sourced from the connected Race Data Source.", styles["BodyText"]))
     if (report.get("historical_horses") or {}).get("horses"):
         story.append(t(["Rank","Horse","Trainer","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("horse"),i.get("trainer"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_horses") or {}).get("horses")]))
     if (report.get("historical_trainers") or {}).get("profiles"):
@@ -1726,7 +1726,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
         story.append(Paragraph("Top 20 Jockey Strike Rate — Last 100", styles["RRTHeading"]))
         story.append(t(["Rank","Jockey","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("entity_name"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_jockeys") or {}).get("profiles")]))
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
-    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.0 Promotion Controller when its configured gates and operating mode authorise promotion.", styles["BodyText"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.1 Promotion Controller when its configured gates and operating mode authorise promotion.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}
