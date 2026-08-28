@@ -1565,6 +1565,66 @@ def _learning_no_market_summary() -> Dict[str, Any]:
     }
 
 
+def _learning_latest_selection_analysis_cached() -> Dict[str, Any]:
+    """
+    Return the latest stored Selection Intelligence analysis for reporting only.
+    Unlike get_latest_selection_analysis(), this helper never regenerates the
+    full Selection Intelligence dataset during an HTML/PDF request.
+    """
+    try:
+        row = fetch_one(
+            """
+            SELECT analysis_json, generated_at
+            FROM rrt_selection_analysis
+            ORDER BY generated_at DESC
+            LIMIT 1;
+            """
+        ) or {}
+
+        analysis = row.get("analysis_json") or {}
+        if isinstance(analysis, str):
+            import json
+            analysis = json.loads(analysis)
+
+        if not row:
+            return {
+                "success": True,
+                "provider": "PostgreSQL",
+                "selection_intelligence_version": REPORT_VERSION,
+                "report": "latest_selection_analysis_cached",
+                "analysis": {},
+                "generated_at": None,
+                "report_execution": "cached_only",
+                "note": (
+                    "No stored Selection Intelligence analysis is currently available. "
+                    "The Learning Report does not regenerate Selection Intelligence "
+                    "during page generation."
+                ),
+            }
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "selection_intelligence_version": REPORT_VERSION,
+            "report": "latest_selection_analysis_cached",
+            "analysis": analysis,
+            "generated_at": row.get("generated_at"),
+            "report_execution": "cached_only",
+            "note": (
+                "Learning Report uses the latest stored Selection Intelligence result. "
+                "It does not trigger a full Selection Intelligence regeneration."
+            ),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "selection_intelligence_version": REPORT_VERSION,
+            "report": "latest_selection_analysis_cached",
+            "error": str(error),
+        }
+
+
 def get_learning_recommendations() -> Dict[str, Any]:
     try:
         from promotion_engine import get_promotion_status
@@ -1660,7 +1720,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "model_health": model_health,
             "simulation_history": get_simulation_history(limit=10),
             "best_simulations": best_simulations,
-            "selection_intelligence": get_latest_selection_analysis(),
+            "selection_intelligence": _learning_latest_selection_analysis_cached(),
             "speed_calibration": speed_calibration,
             "safety_note": (
                 f"This v2.22.1 report reflects the active PostgreSQL production "
