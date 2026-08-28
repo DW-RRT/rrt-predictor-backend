@@ -246,22 +246,27 @@ def get_freshness_first_up_analysis() -> Dict[str, Any]:
                       OR (c.runner_id IS NULL AND UPPER(TRIM(h.horse_name)) = UPPER(TRIM(c.runner_name))))
                 GROUP BY c.meeting_id,c.meeting_date,c.runner_id,c.runner_name,c.actual_position
             )
+            , banded AS (
+                SELECT prior.*,
+                       CASE
+                         WHEN previous_run_date IS NULL THEN 'No prior cached run'
+                         WHEN meeting_date - previous_run_date <= 14 THEN '0-14 days'
+                         WHEN meeting_date - previous_run_date <= 28 THEN '15-28 days'
+                         WHEN meeting_date - previous_run_date <= 60 THEN '29-60 days'
+                         WHEN meeting_date - previous_run_date <= 120 THEN '61-120 days'
+                         ELSE '121+ days / first-up-like'
+                       END AS freshness_band
+                FROM prior
+            )
             SELECT
-                CASE
-                  WHEN previous_run_date IS NULL THEN 'No prior cached run'
-                  WHEN meeting_date - previous_run_date <= 14 THEN '0-14 days'
-                  WHEN meeting_date - previous_run_date <= 28 THEN '15-28 days'
-                  WHEN meeting_date - previous_run_date <= 60 THEN '29-60 days'
-                  WHEN meeting_date - previous_run_date <= 120 THEN '61-120 days'
-                  ELSE '121+ days / first-up-like'
-                END AS freshness_band,
+                freshness_band,
                 COUNT(*) AS runners,
                 COUNT(*) FILTER (WHERE actual_position=1) AS winners,
                 COUNT(*) FILTER (WHERE actual_position BETWEEN 1 AND 3) AS placers,
                 ROUND(100.0*COUNT(*) FILTER (WHERE actual_position=1)/NULLIF(COUNT(*),0),2) AS win_pct,
                 ROUND(100.0*COUNT(*) FILTER (WHERE actual_position BETWEEN 1 AND 3)/NULLIF(COUNT(*),0),2) AS place_pct
-            FROM prior
-            GROUP BY 1
+            FROM banded
+            GROUP BY freshness_band
             ORDER BY CASE freshness_band WHEN '0-14 days' THEN 1 WHEN '15-28 days' THEN 2 WHEN '29-60 days' THEN 3 WHEN '61-120 days' THEN 4 WHEN '121+ days / first-up-like' THEN 5 ELSE 6 END;
         """)
         return {"success":True,"analysis_version":"2.22.1","analysis":"freshness_first_up","analysis_only":True,"production_weight":0.0,"production_model_changed":False,"bands":rows,"note":"Freshness/First-Up is evidence gathering only. It is not included in production scoring or adaptive promotion candidates."}
