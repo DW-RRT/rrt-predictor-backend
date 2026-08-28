@@ -1385,6 +1385,186 @@ def get_each_way_leaderboards(
         }
 
 
+def _learning_track_condition_audit_from_factor_report(
+    factor_effectiveness: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Lightweight Learning Report view of Track Condition.
+    Reuses the factor-effectiveness result already calculated for this report,
+    avoiding a second full 13-factor analysis pass.
+    """
+    try:
+        track_factor = next(
+            (
+                item
+                for item in (factor_effectiveness.get("factors") or [])
+                if str(item.get("factor") or "").strip().lower() == "track_condition"
+            ),
+            {},
+        )
+        coverage = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS completed_rows,
+                COUNT(track_condition_score) AS scored_rows,
+                ROUND(
+                    100.0 * COUNT(track_condition_score) / NULLIF(COUNT(*), 0),
+                    2
+                ) AS scored_pct,
+                ROUND(AVG(track_condition_score), 2) AS avg_score,
+                ROUND(STDDEV_POP(track_condition_score), 2) AS score_stddev
+            FROM rrt_runner_factor_snapshots
+            WHERE actual_position IS NOT NULL;
+            """
+        ) or {}
+        return {
+            "success": True,
+            "analysis_version": REPORT_VERSION,
+            "analysis": "track_condition_audit",
+            "analysis_only": True,
+            "production_model_changed": False,
+            "coverage": coverage,
+            "factor_effectiveness": track_factor,
+            "interaction_logic_added": False,
+            "note": (
+                "Existing Track Condition measurement is audited as-is. "
+                "The Learning Report reuses its already-calculated factor evidence "
+                "and does not introduce interaction logic or a production-weight change."
+            ),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "analysis_version": REPORT_VERSION,
+            "analysis": "track_condition_audit",
+            "error": str(error),
+        }
+
+
+def _learning_model_health_from_factor_report(
+    factor_effectiveness: Dict[str, Any],
+    performance_summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Lightweight Learning Report model-health view.
+    Reuses the factor-effectiveness result already calculated for this request,
+    avoiding another full factor-analysis pass.
+    """
+    try:
+        dataset = factor_effectiveness.get("dataset") or {}
+        factors = factor_effectiveness.get("factors") or []
+
+        completed_rows = _to_int(dataset.get("completed_runner_rows"))
+        winners = _to_int(dataset.get("winner_rows"))
+        placed = _to_int(dataset.get("placed_rows"))
+        tracks = _to_int(dataset.get("track_count"))
+        dates = _to_int(dataset.get("date_count"))
+
+        checks = {
+            "completed_runner_rows": completed_rows >= 1000,
+            "winner_rows": winners >= 80,
+            "placed_rows": placed >= 250,
+            "track_diversity": tracks >= 20,
+            "date_diversity": dates >= 7,
+        }
+        score = round(
+            (sum(1 for value in checks.values() if value) / len(checks)) * 100,
+            1,
+        )
+        maturity = (
+            "Mature" if score >= 90
+            else "Developing" if score >= 60
+            else "Early"
+        )
+
+        best_factor = factors[0] if factors else None
+        weakest_factor = factors[-1] if factors else None
+
+        if maturity == "Early":
+            next_action = (
+                "Continue collecting automated result updates before changing "
+                "production weights. Use early factor rankings for monitoring only."
+            )
+        elif not best_factor:
+            next_action = "Continue collecting factor data."
+        elif maturity == "Developing":
+            next_action = (
+                f"Begin monitoring {best_factor.get('label')} as a candidate for "
+                "future weighting review. Do not change production weights until "
+                "the dataset reaches mature thresholds."
+            )
+        elif weakest_factor:
+            next_action = (
+                f"Review whether {best_factor.get('label')} should be strengthened "
+                f"and {weakest_factor.get('label')} should be reduced in a simulator "
+                "before production use."
+            )
+        else:
+            next_action = "Dataset is mature enough for simulation-only weight testing."
+
+        return {
+            "success": True,
+            "provider": "PostgreSQL",
+            "analysis_version": REPORT_VERSION,
+            "report": "model_health",
+            "analysis_only": True,
+            "prediction_model_changed": False,
+            "model_version": MODEL_VERSION,
+            "performance_summary": performance_summary or {},
+            "learning_dataset": dataset,
+            "readiness": {
+                "score": score,
+                "maturity": maturity,
+                "checks": checks,
+                "minimums": {
+                    "completed_runner_rows": 1000,
+                    "winner_rows": 80,
+                    "placed_rows": 250,
+                    "track_diversity": 20,
+                    "date_diversity": 7,
+                },
+            },
+            "best_factor": best_factor,
+            "weakest_factor": weakest_factor,
+            "recommended_next_action": next_action,
+            "safety_note": (
+                "Learning Report model health reuses the factor analysis already "
+                "calculated for this request. Production weights can change only "
+                "through an authorised Promotion Controller decision."
+            ),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "analysis_version": REPORT_VERSION,
+            "report": "model_health",
+            "error": str(error),
+        }
+
+
+def _learning_no_market_summary() -> Dict[str, Any]:
+    """
+    Do not run a full no-market simulation while rendering HTML/PDF.
+    The dedicated endpoint remains the authoritative on-demand calculation.
+    This prevents the report request from blocking on simulator/replay work.
+    """
+    return {
+        "success": True,
+        "analysis_version": REPORT_VERSION,
+        "analysis": "no_market_comparison",
+        "analysis_only": True,
+        "production_model_changed": False,
+        "report_execution": "deferred_to_dedicated_endpoint",
+        "endpoint": "/api/simulator/no-market-comparison",
+        "note": (
+            "The Learning Report does not execute the full No-Market historical "
+            "simulation during page generation. Run the dedicated No-Market endpoint "
+            "when a refreshed comparison is required. Production weights are unchanged."
+        ),
+    }
+
+
 def get_learning_recommendations() -> Dict[str, Any]:
     try:
         from promotion_engine import get_promotion_status
@@ -1393,51 +1573,111 @@ def get_learning_recommendations() -> Dict[str, Any]:
         base = _learning_base()
         tracks = _learning_tracks()
         dates = _learning_dates()
-        factor_effectiveness = _align_analysis_metadata(get_factor_effectiveness_report())
+
+        # One factor-effectiveness pass per report request.
+        factor_effectiveness = _align_analysis_metadata(
+            get_factor_effectiveness_report()
+        )
+
         best_simulations = get_best_simulations(limit=10)
-        speed_calibration = _extract_speed_calibration(factor_effectiveness, best_simulations)
-        weight_recommendations = _apply_speed_report_override(get_weight_recommendations(), speed_calibration)
+        speed_calibration = _extract_speed_calibration(
+            factor_effectiveness,
+            best_simulations,
+        )
+        weight_recommendations = _apply_speed_report_override(
+            get_weight_recommendations(),
+            speed_calibration,
+        )
+
+        # v2.22.1 HTML/PDF responsiveness:
+        # Freshness is now validated and retained.
+        # Track Condition and Model Health reuse the factor analysis already calculated.
+        # The expensive No-Market simulation is deferred to its dedicated endpoint.
+        freshness_first_up = get_freshness_first_up_analysis()
+        track_condition_audit = _learning_track_condition_audit_from_factor_report(
+            factor_effectiveness
+        )
+        model_health = _learning_model_health_from_factor_report(
+            factor_effectiveness,
+            base.get("summary") or {},
+        )
+        no_market_comparison = _learning_no_market_summary()
+
         return {
-            "success": True, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION,
-            "report": "learning_recommendations", "generated_at": _now_utc_iso(),
-            "analysis_only": True, "prediction_model_changed": False,
-            "automatic_weight_changes_enabled": bool(promotion_status.get("automatic_weight_changes_enabled")),
+            "success": True,
+            "provider": "PostgreSQL",
+            "learning_version": LEARNING_VERSION,
+            "report": "learning_recommendations",
+            "generated_at": _now_utc_iso(),
+            "analysis_only": True,
+            "prediction_model_changed": False,
+            "automatic_weight_changes_enabled": bool(
+                promotion_status.get("automatic_weight_changes_enabled")
+            ),
             "promotion_mode": promotion_status.get("promotion_mode"),
-            "database_schema_version": DATABASE_SCHEMA_VERSION, "model_version": MODEL_VERSION,
+            "database_schema_version": DATABASE_SCHEMA_VERSION,
+            "model_version": MODEL_VERSION,
             "learning_status": {
-                "ready_for_learning": base.get("ready_for_learning"), "confidence": base.get("confidence"),
-                "minimum_requirements": base.get("minimums"), "checks": base.get("checks"),
-                "recommendation": _learning_recommendation(base.get("confidence"), bool(base.get("ready_for_learning"))),
+                "ready_for_learning": base.get("ready_for_learning"),
+                "confidence": base.get("confidence"),
+                "minimum_requirements": base.get("minimums"),
+                "checks": base.get("checks"),
+                "recommendation": _learning_recommendation(
+                    base.get("confidence"),
+                    bool(base.get("ready_for_learning")),
+                ),
             },
-            "dataset": base.get("summary"), "head_to_head": base.get("head_to_head"),
+            "dataset": base.get("summary"),
+            "head_to_head": base.get("head_to_head"),
             "strengths": _learning_strengths(base, tracks, dates),
             "weaknesses": _learning_weaknesses(base, tracks, dates),
             "priority_action_plan": _learning_actions(base),
-            "track_sets": tracks, "date_sets": dates,
+            "track_sets": tracks,
+            "date_sets": dates,
             "each_way_leaderboards": get_each_way_leaderboards(),
             "profile_cache_summary": get_profile_cache_summary(),
-            "historical_horses": get_historical_horse_leaderboard(limit=20, min_starts=5),
-            "historical_trainers": get_strike_rate_leaderboard("trainer", limit=20, min_starts=100, period="last100"),
-            "historical_jockeys": get_strike_rate_leaderboard("jockey", limit=20, min_starts=100, period="last100"),
+            "historical_horses": get_historical_horse_leaderboard(
+                limit=20,
+                min_starts=5,
+            ),
+            "historical_trainers": get_strike_rate_leaderboard(
+                "trainer",
+                limit=20,
+                min_starts=100,
+                period="last100",
+            ),
+            "historical_jockeys": get_strike_rate_leaderboard(
+                "jockey",
+                limit=20,
+                min_starts=100,
+                period="last100",
+            ),
             "factor_effectiveness": factor_effectiveness,
             "weight_recommendations": weight_recommendations,
-            "freshness_first_up": get_freshness_first_up_analysis(),
-            "track_condition_audit": get_track_condition_audit(),
-            "no_market_comparison": run_no_market_comparison(),
-            "model_health": get_model_health_report(),
+            "freshness_first_up": freshness_first_up,
+            "track_condition_audit": track_condition_audit,
+            "no_market_comparison": no_market_comparison,
+            "model_health": model_health,
             "simulation_history": get_simulation_history(limit=10),
             "best_simulations": best_simulations,
             "selection_intelligence": get_latest_selection_analysis(),
             "speed_calibration": speed_calibration,
             "safety_note": (
-                f"This v2.22.1 report reflects the active PostgreSQL production weight set, including Normalised Speed at 10%. "
-                f"Promotion Controller mode is {promotion_status.get('promotion_mode')}. "
-                "Recommendations do not directly change production weights; only an authorised Promotion Controller decision can apply a candidate."
+                f"This v2.22.1 report reflects the active PostgreSQL production "
+                f"weight set, including Normalised Speed at 10%. Promotion Controller "
+                f"mode is {promotion_status.get('promotion_mode')}. Recommendations "
+                "do not directly change production weights; only an authorised "
+                "Promotion Controller decision can apply a candidate."
             ),
         }
     except Exception as error:
-        return {"success": False, "provider": "PostgreSQL", "learning_version": LEARNING_VERSION, "report": "learning_recommendations", "error": str(error)}
-
+        return {
+            "success": False,
+            "provider": "PostgreSQL",
+            "learning_version": LEARNING_VERSION,
+            "report": "learning_recommendations",
+            "error": str(error),
+        }
 
 def _html_table(headers: List[str], rows: List[List[Any]]) -> str:
     th = "".join(f"<th>{escape(str(h))}</th>" for h in headers)
@@ -1611,7 +1851,7 @@ def generate_learning_report_html() -> str:
         '<div class="note">Audit of the existing Track Condition factor against completed runner outcomes. This section does not alter the current Track Condition production weight.</div>',
         _html_table(['Metric','Value'], _analysis_metric_rows(report.get('track_condition_audit') or {})),
         '<h2>No-Market Historical Comparison</h2>',
-        '<div class="note">Analysis-only replay with Market removed and the remaining production factors proportionally normalised. Production weights are not changed.</div>',
+        '<div class="note">Analysis-only. To keep the Learning Report responsive, the full No-Market simulation is not executed while this page is generated. Use /api/simulator/no-market-comparison for a refreshed calculation. Production weights are not changed.</div>',
         _html_table(['Metric','Value'], _analysis_metric_rows(report.get('no_market_comparison') or {})),
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
