@@ -2,8 +2,8 @@ from typing import Any, Dict, List
 
 from database import fetch_all, fetch_one
 
-ANALYSIS_VERSION = "2.22.1"
-MODEL_VERSION = "2.22.1"
+ANALYSIS_VERSION = "2.21.0"
+MODEL_VERSION = "2.21.0"
 
 FACTOR_COLUMNS = [
     {"key": "last10", "label": "Last 10 Form", "score_column": "last10_score", "weighted_column": "weighted_last10"},
@@ -149,7 +149,7 @@ def get_factor_effectiveness_report() -> Dict[str, Any]:
         ranked_combined = sorted(factors, key=lambda item: item.get("combined_predictive_score") or 0, reverse=True)
         for rank, item in enumerate(ranked_combined, start=1):
             item["predictive_rank"] = rank
-        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_effectiveness", "model_version": MODEL_VERSION, "analysis_only": True, "prediction_model_changed": False, "dataset": {**dataset, "confidence": _confidence_from_sample(completed_runner_rows, winner_rows, placed_rows)}, "summary": {"best_win_factor": ranked_by_win[0] if ranked_by_win else None, "best_place_factor": ranked_by_place[0] if ranked_by_place else None, "best_combined_factor": ranked_combined[0] if ranked_combined else None, "weakest_combined_factor": ranked_combined[-1] if ranked_combined else None}, "factors": ranked_combined, "rankings": {"by_win_correlation": ranked_by_win, "by_place_correlation": ranked_by_place, "by_combined_predictive_score": ranked_combined}, "safety_note": "v2.22.0 factor analysis is observational. It does not directly change model weights or production prediction behaviour."}
+        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_effectiveness", "model_version": MODEL_VERSION, "analysis_only": True, "prediction_model_changed": False, "dataset": {**dataset, "confidence": _confidence_from_sample(completed_runner_rows, winner_rows, placed_rows)}, "summary": {"best_win_factor": ranked_by_win[0] if ranked_by_win else None, "best_place_factor": ranked_by_place[0] if ranked_by_place else None, "best_combined_factor": ranked_combined[0] if ranked_combined else None, "weakest_combined_factor": ranked_combined[-1] if ranked_combined else None}, "factors": ranked_combined, "rankings": {"by_win_correlation": ranked_by_win, "by_place_correlation": ranked_by_place, "by_combined_predictive_score": ranked_combined}, "safety_note": "v2.21.0 analysis only. No model weights or production prediction behaviour have been changed."}
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_effectiveness", "error": str(error)}
 
@@ -188,7 +188,7 @@ def get_factor_trend_report(limit: int = 30) -> Dict[str, Any]:
             movement = round(_to_float(recent.get("place_correlation")) - _to_float(previous.get("place_correlation")), 4)
             trend = "Improving" if movement >= 0.04 else "Declining" if movement <= -0.04 else "Stable"
             trends.append({"factor": factor["key"], "label": factor["label"], "recent_place_correlation": _to_float(recent.get("place_correlation")), "previous_place_correlation": _to_float(previous.get("place_correlation")), "movement": movement, "trend": trend, "recent_runner_count": _to_int(recent.get("runner_count")), "previous_runner_count": _to_int(previous.get("runner_count"))})
-        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_trends", "analysis_only": True, "recent_meeting_window": limit, "trends": sorted(trends, key=lambda item: abs(item.get("movement") or 0), reverse=True), "safety_note": "v2.22.0 trend analysis is observational only and does not directly change model weights."}
+        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_trends", "analysis_only": True, "recent_meeting_window": limit, "trends": sorted(trends, key=lambda item: abs(item.get("movement") or 0), reverse=True), "safety_note": "v2.21.0 trend analysis is observational only and does not change model weights."}
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "factor_trends", "error": str(error)}
 
@@ -209,7 +209,7 @@ def get_model_health_report() -> Dict[str, Any]:
         readiness_score = round((sum(1 for value in readiness_checks.values() if value) / len(readiness_checks)) * 100, 1)
         maturity = "Mature" if readiness_score >= 90 else "Developing" if readiness_score >= 60 else "Early"
         best_factor = factors[0] if factors else None; weakest_factor = factors[-1] if factors else None
-        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "model_health", "analysis_only": True, "prediction_model_changed": False, "model_version": MODEL_VERSION, "performance_summary": overall, "learning_dataset": dataset, "readiness": {"score": readiness_score, "maturity": maturity, "checks": readiness_checks, "minimums": {"completed_runner_rows": 1000, "winner_rows": 80, "placed_rows": 250, "track_diversity": 20, "date_diversity": 7}}, "best_factor": best_factor, "weakest_factor": weakest_factor, "recommended_next_action": _model_health_action(maturity, best_factor, weakest_factor), "safety_note": "v2.22.0 model health is observational. Production weights can change only through an authorised Promotion Controller decision."}
+        return {"success": True, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "model_health", "analysis_only": True, "prediction_model_changed": False, "model_version": MODEL_VERSION, "performance_summary": overall, "learning_dataset": dataset, "readiness": {"score": readiness_score, "maturity": maturity, "checks": readiness_checks, "minimums": {"completed_runner_rows": 1000, "winner_rows": 80, "placed_rows": 250, "track_diversity": 20, "date_diversity": 7}}, "best_factor": best_factor, "weakest_factor": weakest_factor, "recommended_next_action": _model_health_action(maturity, best_factor, weakest_factor), "safety_note": "v2.21.0 model health is analysis-only. Production prediction weights remain unchanged."}
     except Exception as error:
         return {"success": False, "provider": "PostgreSQL", "analysis_version": ANALYSIS_VERSION, "report": "model_health", "error": str(error)}
 
@@ -224,69 +224,3 @@ def _model_health_action(maturity: str, best_factor: Dict[str, Any], weakest_fac
     if weakest_factor:
         return f"Review whether {best_factor.get('label')} should be strengthened and {weakest_factor.get('label')} should be reduced in a simulator before production use."
     return "Dataset is mature enough for simulation-only weight testing."
-
-# ---------------------------------------------------------------------
-# v2.22.1 analysis-only audits
-# ---------------------------------------------------------------------
-def get_freshness_first_up_analysis() -> Dict[str, Any]:
-    """Analyse days since the horse's previous cached start. No production weight is assigned."""
-    try:
-        rows = fetch_all("""
-            WITH completed AS (
-                SELECT meeting_id, meeting_date, runner_id, runner_name, actual_position
-                FROM rrt_runner_factor_snapshots
-                WHERE actual_position IS NOT NULL AND meeting_date IS NOT NULL
-            ), prior AS (
-                SELECT c.*,
-                       MAX(h.run_date) AS previous_run_date
-                FROM completed c
-                LEFT JOIN rrt_horse_history h
-                  ON h.run_date < c.meeting_date
-                 AND ((c.runner_id IS NOT NULL AND h.horse_id = c.runner_id)
-                      OR (c.runner_id IS NULL AND UPPER(TRIM(h.horse_name)) = UPPER(TRIM(c.runner_name))))
-                GROUP BY c.meeting_id,c.meeting_date,c.runner_id,c.runner_name,c.actual_position
-            )
-            , banded AS (
-                SELECT prior.*,
-                       CASE
-                         WHEN previous_run_date IS NULL THEN 'No prior cached run'
-                         WHEN meeting_date - previous_run_date <= 14 THEN '0-14 days'
-                         WHEN meeting_date - previous_run_date <= 28 THEN '15-28 days'
-                         WHEN meeting_date - previous_run_date <= 60 THEN '29-60 days'
-                         WHEN meeting_date - previous_run_date <= 120 THEN '61-120 days'
-                         ELSE '121+ days / first-up-like'
-                       END AS freshness_band
-                FROM prior
-            )
-            SELECT
-                freshness_band,
-                COUNT(*) AS runners,
-                COUNT(*) FILTER (WHERE actual_position=1) AS winners,
-                COUNT(*) FILTER (WHERE actual_position BETWEEN 1 AND 3) AS placers,
-                ROUND(100.0*COUNT(*) FILTER (WHERE actual_position=1)/NULLIF(COUNT(*),0),2) AS win_pct,
-                ROUND(100.0*COUNT(*) FILTER (WHERE actual_position BETWEEN 1 AND 3)/NULLIF(COUNT(*),0),2) AS place_pct
-            FROM banded
-            GROUP BY freshness_band
-            ORDER BY CASE freshness_band WHEN '0-14 days' THEN 1 WHEN '15-28 days' THEN 2 WHEN '29-60 days' THEN 3 WHEN '61-120 days' THEN 4 WHEN '121+ days / first-up-like' THEN 5 ELSE 6 END;
-        """)
-        return {"success":True,"analysis_version":"2.22.1","analysis":"freshness_first_up","analysis_only":True,"production_weight":0.0,"production_model_changed":False,"bands":rows,"note":"Freshness/First-Up is evidence gathering only. It is not included in production scoring or adaptive promotion candidates."}
-    except Exception as error:
-        return {"success":False,"analysis_version":"2.22.1","analysis":"freshness_first_up","error":str(error)}
-
-
-def get_track_condition_audit() -> Dict[str, Any]:
-    """Audit the existing Track Condition factor before any interaction logic is considered."""
-    try:
-        factor_report = get_factor_effectiveness_report()
-        track_factor = next((x for x in (factor_report.get("factors") or []) if x.get("factor") == "track_condition"), {})
-        coverage = fetch_one("""
-            SELECT COUNT(*) AS completed_rows,
-                   COUNT(track_condition_score) AS scored_rows,
-                   ROUND(100.0*COUNT(track_condition_score)/NULLIF(COUNT(*),0),2) AS scored_pct,
-                   ROUND(AVG(track_condition_score),2) AS avg_score,
-                   ROUND(STDDEV_POP(track_condition_score),2) AS score_stddev
-            FROM rrt_runner_factor_snapshots WHERE actual_position IS NOT NULL;
-        """) or {}
-        return {"success":True,"analysis_version":"2.22.1","analysis":"track_condition_audit","analysis_only":True,"production_model_changed":False,"coverage":coverage,"factor_effectiveness":track_factor,"interaction_logic_added":False,"note":"Existing Track Condition measurement is audited as-is. No track-condition interaction or production-weight change is introduced in v2.22.1."}
-    except Exception as error:
-        return {"success":False,"analysis_version":"2.22.1","analysis":"track_condition_audit","error":str(error)}
