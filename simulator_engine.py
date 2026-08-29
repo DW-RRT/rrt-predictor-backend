@@ -777,9 +777,9 @@ def run_no_market_comparison(min_meeting_date: Optional[str]=None, max_meeting_d
         notes="Analysis only: Market removed; all remaining active production weights proportionally normalised. Production is unchanged.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
-        save_result=False,
+        save_result=True,
         simulation_group="v2.22.1 no-market-analysis",
     )
     if isinstance(result, dict):
-        result.update({"analysis_version":"2.22.1","analysis":"no_market_comparison","analysis_only":True,"market_removed":True,"production_weights_changed":False,"normalised_no_market_weights":normalised})
+        result.update({"analysis_version":"2.22.1","analysis":"no_market_comparison","analysis_only":True,"market_removed":True,"production_weights_changed":False,"normalised_no_market_weights":normalised,"saved_for_reporting":True})
     return result

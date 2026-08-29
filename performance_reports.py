@@ -1545,25 +1545,137 @@ def _learning_model_health_from_factor_report(
 
 def _learning_no_market_summary() -> Dict[str, Any]:
     """
-    Do not run a full no-market simulation while rendering HTML/PDF.
-    The dedicated endpoint remains the authoritative on-demand calculation.
-    This prevents the report request from blocking on simulator/replay work.
-    """
-    return {
-        "success": True,
-        "analysis_version": REPORT_VERSION,
-        "analysis": "no_market_comparison",
-        "analysis_only": True,
-        "production_model_changed": False,
-        "report_execution": "deferred_to_dedicated_endpoint",
-        "endpoint": "/api/simulator/no-market-comparison",
-        "note": (
-            "The Learning Report does not execute the full No-Market historical "
-            "simulation during page generation. Run the dedicated No-Market endpoint "
-            "when a refreshed comparison is required. Production weights are unchanged."
-        ),
-    }
+    Read the latest completed No-Market historical comparison from PostgreSQL.
 
+    The Learning Report never executes the full historical simulation itself.
+    The dedicated /api/simulator/no-market-comparison endpoint performs the
+    calculation and stores the result; HTML/PDF then read that saved result.
+    """
+    try:
+        row = fetch_one(
+            """
+            SELECT simulation_json, created_at
+            FROM rrt_weight_simulations
+            WHERE simulation_group = 'v2.22.1 no-market-analysis'
+            ORDER BY created_at DESC
+            LIMIT 1;
+            """
+        ) or {}
+
+        if not row:
+            return {
+                "success": True,
+                "analysis_version": REPORT_VERSION,
+                "analysis": "no_market_comparison",
+                "analysis_only": True,
+                "production_model_changed": False,
+                "report_execution": "awaiting_saved_comparison",
+                "endpoint": "/api/simulator/no-market-comparison",
+                "saved_result_available": False,
+                "note": (
+                    "No saved No-Market comparison is available yet. Run the "
+                    "dedicated No-Market endpoint once; the completed analysis "
+                    "will then appear automatically in this Learning Report."
+                ),
+            }
+
+        payload = row.get("simulation_json") or {}
+        if isinstance(payload, str):
+            import json
+            payload = json.loads(payload)
+
+        current_model = payload.get("current_model") or {}
+        no_market_model = payload.get("simulated_model") or {}
+        current_metrics = current_model.get("metrics") or {}
+        no_market_metrics = no_market_model.get("metrics") or {}
+        improvement = payload.get("improvement") or {}
+        current_weights = payload.get("current_weights") or {}
+        no_market_weights = payload.get("test_weights") or {}
+        dataset = payload.get("dataset") or {}
+        recommendation = payload.get("recommendation") or {}
+
+        return {
+            "success": True,
+            "analysis_version": REPORT_VERSION,
+            "analysis": "no_market_comparison",
+            "analysis_only": True,
+            "production_model_changed": False,
+            "market_removed": True,
+            "report_execution": "latest_saved_dedicated_analysis",
+            "endpoint": "/api/simulator/no-market-comparison",
+            "saved_result_available": True,
+            "saved_at": row.get("created_at"),
+            "dataset": dataset,
+            "current_weights": current_weights,
+            "no_market_weights": no_market_weights,
+            "current_metrics": current_metrics,
+            "no_market_metrics": no_market_metrics,
+            "difference": improvement,
+            "recommendation": recommendation,
+            "note": (
+                "Latest saved analysis from the dedicated No-Market endpoint. "
+                "Market is set to 0% and the remaining active production weights "
+                "are proportionally normalised. Production weights are unchanged."
+            ),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "analysis_version": REPORT_VERSION,
+            "analysis": "no_market_comparison",
+            "error": str(error),
+        }
+
+
+def _no_market_performance_rows(payload: Dict[str, Any]) -> List[List[Any]]:
+    current = payload.get("current_metrics") or {}
+    no_market = payload.get("no_market_metrics") or {}
+    difference = payload.get("difference") or {}
+    metrics = [
+        ("Top 1 Win", "top1_win_strike_rate"),
+        ("Top 4 Winner Coverage", "top4_winner_coverage_rate"),
+        ("Each-Way", "each_way_strike_rate"),
+        ("Roughie E/Way", "roughie_strike_rate"),
+        ("Overall Accuracy", "overall_accuracy"),
+    ]
+    return [
+        [
+            label,
+            current.get(key),
+            no_market.get(key),
+            difference.get(key),
+        ]
+        for label, key in metrics
+    ]
+
+
+def _no_market_weight_rows(payload: Dict[str, Any]) -> List[List[Any]]:
+    current = payload.get("current_weights") or {}
+    no_market = payload.get("no_market_weights") or {}
+    labels = {
+        "last10": "Last 10 Form",
+        "win_place": "Win / Place Record",
+        "track_record": "Track Record",
+        "distance_record": "Distance Record",
+        "track_distance": "Track / Distance",
+        "track_condition": "Track Condition",
+        "trainer": "Trainer",
+        "jockey": "Jockey",
+        "trainer_jockey": "Trainer / Jockey",
+        "barrier": "Barrier",
+        "weight": "Weight Carried",
+        "market": "Market",
+        "speed": "Normalised Speed Rating",
+    }
+    order = [
+        "last10", "win_place", "track_record", "distance_record",
+        "track_distance", "track_condition", "trainer", "jockey",
+        "trainer_jockey", "barrier", "weight", "market", "speed",
+    ]
+    return [
+        [labels[key], current.get(key), no_market.get(key)]
+        for key in order
+    ]
 
 def _learning_latest_selection_analysis_cached() -> Dict[str, Any]:
     """
@@ -2088,8 +2200,19 @@ def generate_learning_report_html() -> str:
         '<div class="note">Audit of the existing Track Condition factor against completed runner outcomes. This section does not alter the current Track Condition production weight.</div>',
         _html_table(['Metric','Value'], _analysis_metric_rows(report.get('track_condition_audit') or {})),
         '<h2>No-Market Historical Comparison</h2>',
-        '<div class="note">Analysis-only. To keep the Learning Report responsive, the full No-Market simulation is not executed while this page is generated. Use /api/simulator/no-market-comparison for a refreshed calculation. Production weights are not changed.</div>',
-        _html_table(['Metric','Value'], _analysis_metric_rows(report.get('no_market_comparison') or {})),
+        '<div class="note">Analysis-only comparison using the latest saved result from /api/simulator/no-market-comparison. Market is removed and the remaining active weights are proportionally normalised. The Learning Report reads the saved result only and does not re-run the historical simulation. Production weights are unchanged.</div>',
+        _html_table(
+            ['Metric','Current Model %','No-Market %','Difference'],
+            _no_market_performance_rows(report.get('no_market_comparison') or {})
+        ) if (report.get('no_market_comparison') or {}).get('saved_result_available') else _html_table(
+            ['Metric','Value'],
+            _analysis_metric_rows(report.get('no_market_comparison') or {})
+        ),
+        '<h3>No-Market Weight Normalisation</h3>' if (report.get('no_market_comparison') or {}).get('saved_result_available') else '',
+        _html_table(
+            ['Factor','Current Production %','No-Market Test %'],
+            _no_market_weight_rows(report.get('no_market_comparison') or {})
+        ) if (report.get('no_market_comparison') or {}).get('saved_result_available') else '',
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
@@ -2239,6 +2362,23 @@ def generate_learning_report_pdf_bytes() -> bytes:
     health_readiness = model_health.get("readiness") or {}
     story.append(Paragraph("Model Health", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Readiness Score", health_readiness.get('score')],["Dataset Maturity", health_readiness.get('maturity')],["Best Factor", (model_health.get('best_factor') or {}).get('label')],["Weakest Factor", (model_health.get('weakest_factor') or {}).get('label')],["Next Action", model_health.get('recommended_next_action')]], [5*cm,11*cm]))
+    no_market = report.get("no_market_comparison") or {}
+    story.append(Paragraph("No-Market Historical Comparison", styles["RRTHeading"]))
+    story.append(Paragraph("Analysis-only. Uses the latest saved dedicated No-Market comparison; production weights are unchanged.", styles["BodyText"]))
+    if no_market.get("saved_result_available"):
+        story.append(t(
+            ["Metric","Current Model %","No-Market %","Difference"],
+            _no_market_performance_rows(no_market),
+            [5.5*cm,3.5*cm,3.5*cm,3.5*cm],
+        ))
+        story.append(Paragraph("No-Market Weight Normalisation", styles["RRTHeading"]))
+        story.append(t(
+            ["Factor","Current Production %","No-Market Test %"],
+            _no_market_weight_rows(no_market),
+            [7*cm,4.5*cm,4.5*cm],
+        ))
+    else:
+        story.append(Paragraph(escape(str(no_market.get("note") or "No saved No-Market comparison available.")), styles["BodyText"]))
     story.append(Paragraph("Safety Statement", styles["RRTHeading"])); story.append(Paragraph(escape(str(report.get("safety_note"))), styles["BodyText"]))
     doc.build(story); buffer.seek(0); return buffer.getvalue()
 
