@@ -943,6 +943,8 @@ def api_route_check():
         "/api/learning/each-way-leaderboards": True,
         "/api/results-processor/status": True,
         "/api/results-processor/run": True,
+        "/api/trifecta/summary": True,
+        "/api/trifecta/backfill": True,
         "/api/analysis/factor-effectiveness": True,
         "/api/analysis/factor-trends": True,
         "/api/analysis/weight-recommendations": True,
@@ -1333,7 +1335,7 @@ def api_learning_report_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": "attachment; filename=RRT_Learning_Report_v2_22_0.pdf"
+            "Content-Disposition": "attachment; filename=RRT_Predictor_Learning_Report_v2_22_1.pdf"
         },
     )
 
@@ -2467,6 +2469,222 @@ def _compare_prediction_to_results(
 
 
 
+
+# ---------------------------------------------------------------------
+# Trifecta result audit / backfill - RRT Predictor v2.22.1
+# ---------------------------------------------------------------------
+
+def _trifecta_result_history_summary() -> Dict[str, Any]:
+    """
+    Report persisted meeting-level five-runner box Trifecta history.
+    This is reporting/audit only and does not alter prediction scoring.
+    """
+    try:
+        summary = fetch_one(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE trifecta_strike_rate IS NOT NULL) AS scored_meetings,
+                COUNT(*) FILTER (WHERE trifecta_strike_rate = 100) AS hit_meetings,
+                COUNT(*) FILTER (WHERE trifecta_strike_rate = 0) AS miss_meetings,
+                COUNT(*) FILTER (WHERE trifecta_strike_rate IS NULL) AS pending_history_meetings,
+                ROUND(AVG(trifecta_strike_rate), 2) AS avg_trifecta_strike_rate,
+                MIN(meeting_date) FILTER (WHERE trifecta_strike_rate IS NOT NULL) AS first_scored_date,
+                MAX(meeting_date) FILTER (WHERE trifecta_strike_rate IS NOT NULL) AS latest_scored_date
+            FROM rrt_performance_snapshots;
+            """
+        ) or {}
+
+        eligible_missing = fetch_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM rrt_performance_snapshots perf
+            JOIN rrt_prediction_snapshots pred
+              ON pred.meeting_id = perf.meeting_id
+             AND pred.model_version = perf.model_version
+            JOIN rrt_results_snapshots res
+              ON res.meeting_id = perf.meeting_id
+            WHERE perf.trifecta_strike_rate IS NULL
+              AND COALESCE(
+                    pred.prediction_json->'predictions'
+                        ->'best_box_trifecta_prediction'->>'status',
+                    ''
+                  ) = 'Active'
+              AND jsonb_array_length(
+                    COALESCE(
+                        pred.prediction_json->'predictions'
+                            ->'best_box_trifecta_prediction'->'selections',
+                        '[]'::jsonb
+                    )
+                  ) >= 5;
+            """
+        ) or {}
+
+        return {
+            "success": True,
+            "trifecta_version": "2.22.1",
+            "analysis": "meeting_level_box_trifecta_history",
+            "summary": summary,
+            "eligible_missing_history": int(eligible_missing.get("count") or 0),
+            "definition": (
+                "A hit requires the official first, second and third finishers "
+                "to all be contained in the selected five-runner box, in any order."
+            ),
+            "production_model_changed": False,
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "trifecta_version": "2.22.1",
+            "analysis": "meeting_level_box_trifecta_history",
+            "error": str(error),
+        }
+
+
+def _backfill_trifecta_result_history(limit: int = 100) -> Dict[str, Any]:
+    """
+    Populate missing v2.22.1 meeting-level Trifecta outcomes from already-saved
+    prediction and result snapshots. No external API call is made.
+
+    Existing non-null Trifecta history is never overwritten.
+    """
+    try:
+        safe_limit = max(1, min(int(limit), 500))
+        rows = fetch_all(
+            """
+            SELECT
+                perf.id AS performance_id,
+                perf.meeting_id,
+                perf.model_version,
+                perf.meeting_date,
+                perf.performance_json,
+                pred.prediction_json,
+                res.result_json
+            FROM rrt_performance_snapshots perf
+            JOIN rrt_prediction_snapshots pred
+              ON pred.meeting_id = perf.meeting_id
+             AND pred.model_version = perf.model_version
+            JOIN rrt_results_snapshots res
+              ON res.meeting_id = perf.meeting_id
+            WHERE perf.trifecta_strike_rate IS NULL
+              AND COALESCE(
+                    pred.prediction_json->'predictions'
+                        ->'best_box_trifecta_prediction'->>'status',
+                    ''
+                  ) = 'Active'
+              AND jsonb_array_length(
+                    COALESCE(
+                        pred.prediction_json->'predictions'
+                            ->'best_box_trifecta_prediction'->'selections',
+                        '[]'::jsonb
+                    )
+                  ) >= 5
+            ORDER BY perf.meeting_date DESC NULLS LAST, perf.id DESC
+            LIMIT %s;
+            """,
+            (safe_limit,),
+        )
+
+        processed = 0
+        hits = 0
+        misses = 0
+        skipped_no_complete_top3 = 0
+        details: List[Dict[str, Any]] = []
+
+        for row in rows:
+            prediction_snapshot = row.get("prediction_json") or {}
+            results_snapshot = row.get("result_json") or {}
+            performance_json = row.get("performance_json") or {}
+
+            if isinstance(prediction_snapshot, str):
+                prediction_snapshot = json.loads(prediction_snapshot)
+            if isinstance(results_snapshot, str):
+                results_snapshot = json.loads(results_snapshot)
+            if isinstance(performance_json, str):
+                performance_json = json.loads(performance_json)
+
+            predictions = prediction_snapshot.get("predictions") or {}
+            trifecta_prediction = (
+                predictions.get("best_box_trifecta_prediction") or {}
+            )
+            results_by_race = {
+                str(race.get("race_number") or "").strip(): race
+                for race in (results_snapshot.get("races") or [])
+            }
+
+            trifecta_result = _score_box_trifecta(
+                trifecta=trifecta_prediction,
+                results_by_race=results_by_race,
+            )
+
+            # Do not record a miss unless the official top three are actually
+            # available for the selected race.
+            if len(trifecta_result.get("result_top3") or []) != 3:
+                skipped_no_complete_top3 += 1
+                continue
+
+            strike_rate = 100.0 if trifecta_result.get("hit") else 0.0
+
+            accuracy = performance_json.get("accuracy") or {}
+            accuracy["best_box_trifecta"] = trifecta_result
+            performance_json["accuracy"] = accuracy
+
+            execute_sql(
+                """
+                UPDATE rrt_performance_snapshots
+                SET
+                    trifecta_strike_rate = %s,
+                    performance_json = %s::jsonb,
+                    created_at = NOW()
+                WHERE id = %s
+                  AND trifecta_strike_rate IS NULL;
+                """,
+                (
+                    strike_rate,
+                    json.dumps(performance_json, default=str),
+                    row.get("performance_id"),
+                ),
+            )
+
+            processed += 1
+            hits += 1 if strike_rate == 100.0 else 0
+            misses += 1 if strike_rate == 0.0 else 0
+            details.append(
+                {
+                    "meeting_id": row.get("meeting_id"),
+                    "meeting_date": row.get("meeting_date"),
+                    "model_version": row.get("model_version"),
+                    "race_number": trifecta_result.get("race_number"),
+                    "hit": bool(trifecta_result.get("hit")),
+                    "strike_rate": strike_rate,
+                    "box_runner_count": trifecta_result.get("box_runner_count"),
+                    "result_top3": trifecta_result.get("result_top3"),
+                }
+            )
+
+        return {
+            "success": True,
+            "trifecta_version": "2.22.1",
+            "backfill": "saved_prediction_and_result_snapshots_only",
+            "requested_limit": safe_limit,
+            "eligible_rows_selected": len(rows),
+            "meetings_updated": processed,
+            "hits": hits,
+            "misses": misses,
+            "skipped_no_complete_top3": skipped_no_complete_top3,
+            "details": details,
+            "summary_after": _trifecta_result_history_summary(),
+            "production_model_changed": False,
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "trifecta_version": "2.22.1",
+            "backfill": "saved_prediction_and_result_snapshots_only",
+            "error": str(error),
+        }
+
+
+
 # ---------------------------------------------------------------------
 # Automatic Results Processor - RRT Predictor v2.22.1
 # ---------------------------------------------------------------------
@@ -2753,6 +2971,20 @@ async def _results_processor_loop() -> None:
             AUTO_RESULTS_PROCESSOR_STATE["running"] = False
 
         await asyncio.sleep(AUTO_RESULTS_PROCESSOR_INTERVAL_SECONDS)
+
+
+
+@app.get("/api/trifecta/summary")
+def api_trifecta_summary():
+    return _trifecta_result_history_summary()
+
+
+@app.get("/api/trifecta/backfill")
+def api_trifecta_backfill(
+    limit: int = Query(100, ge=1, le=500),
+):
+    return _backfill_trifecta_result_history(limit=limit)
+
 
 
 @app.on_event("startup")
