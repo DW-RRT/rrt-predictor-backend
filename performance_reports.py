@@ -1625,6 +1625,181 @@ def _learning_latest_selection_analysis_cached() -> Dict[str, Any]:
         }
 
 
+def _learning_weight_recommendations_from_factor_report(
+    factor_effectiveness: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Build the Learning Report weight-recommendation section from the
+    factor-effectiveness result already calculated for this same request.
+
+    This preserves the existing adaptive recommendation thresholds while
+    eliminating:
+      1) a second full get_factor_effectiveness_report() pass; and
+      2) repeated active-weight database reads for every factor.
+    """
+    try:
+        active_row = fetch_one(
+            """
+            SELECT weights_json
+            FROM rrt_model_weight_sets
+            WHERE status = 'Active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1;
+            """
+        ) or {}
+
+        default_weights = {
+            "last10": 14.0,
+            "win_place": 8.0,
+            "track_record": 7.0,
+            "distance_record": 7.0,
+            "track_distance": 7.0,
+            "track_condition": 7.0,
+            "trainer": 6.0,
+            "jockey": 6.0,
+            "trainer_jockey": 8.0,
+            "barrier": 4.0,
+            "weight": 2.0,
+            "market": 14.0,
+            "speed": 10.0,
+        }
+
+        raw_weights = active_row.get("weights_json") or {}
+        if isinstance(raw_weights, dict) and raw_weights:
+            active_weights = {
+                key: _to_float(raw_weights.get(key), value)
+                for key, value in default_weights.items()
+            }
+        else:
+            active_weights = dict(default_weights)
+
+        dataset = factor_effectiveness.get("dataset") or {}
+        dataset_confidence = dataset.get("confidence") or "Low"
+        recommendations: List[Dict[str, Any]] = []
+
+        for factor in factor_effectiveness.get("factors") or []:
+            key = factor.get("factor")
+            label = factor.get("label")
+            current_weight = _to_float(active_weights.get(str(key)), 0.0)
+            combined = _to_float(factor.get("combined_predictive_score"))
+            winner_gap = _to_float(factor.get("winner_gap"))
+            place_gap = _to_float(factor.get("place_gap"))
+            sample_confidence = factor.get("confidence")
+
+            if dataset_confidence in ["Low", "Early"] or sample_confidence == "Low":
+                recommended_weight = current_weight
+                direction = "Hold"
+                priority = "Low"
+                reason = "Dataset is not mature enough for a reliable weight change."
+            elif combined >= 0.18 and winner_gap > 5 and place_gap > 3:
+                recommended_weight = current_weight + 2.0
+                direction = "Increase"
+                priority = "High"
+                reason = (
+                    f"{label} has a strong positive relationship to both winners "
+                    "and placegetters."
+                )
+            elif combined >= 0.10 and (winner_gap > 3 or place_gap > 2):
+                recommended_weight = current_weight + 1.0
+                direction = "Slight Increase"
+                priority = "Medium"
+                reason = (
+                    f"{label} shows useful positive separation in the completed "
+                    "runner dataset."
+                )
+            elif combined <= -0.08 and winner_gap < 0 and place_gap < 0:
+                recommended_weight = max(0.0, current_weight - 2.0)
+                direction = "Reduce"
+                priority = "Medium"
+                reason = (
+                    f"{label} is not separating successful runners and may be "
+                    "over-weighted."
+                )
+            elif abs(combined) < 0.05:
+                recommended_weight = max(0.0, current_weight - 1.0)
+                direction = "Monitor / Possible Reduction"
+                priority = "Low"
+                reason = (
+                    f"{label} has a very weak observed relationship to outcomes."
+                )
+            else:
+                recommended_weight = current_weight
+                direction = "Hold"
+                priority = "Medium"
+                reason = (
+                    f"{label} has an observable but not decisive outcome relationship."
+                )
+
+            recommendations.append(
+                {
+                    "factor": key,
+                    "label": label,
+                    "current_weight": current_weight,
+                    "recommended_weight": round(recommended_weight, 2),
+                    "change": round(recommended_weight - current_weight, 2),
+                    "direction": direction,
+                    "priority": priority,
+                    "confidence": sample_confidence,
+                    "signal_strength": factor.get("signal_strength"),
+                    "combined_predictive_score": combined,
+                    "winner_gap": winner_gap,
+                    "place_gap": place_gap,
+                    "reason": reason,
+                }
+            )
+
+        increase = [item for item in recommendations if _to_float(item.get("change")) > 0]
+        reduce = [item for item in recommendations if _to_float(item.get("change")) < 0]
+        hold = [item for item in recommendations if _to_float(item.get("change")) == 0]
+        net_change = round(
+            sum(_to_float(item.get("change")) for item in recommendations),
+            2,
+        )
+
+        return {
+            "success": True,
+            "provider": "RRT Predictor",
+            "recommendation_version": REPORT_VERSION,
+            "report": "weight_recommendations",
+            "analysis_only": True,
+            "prediction_model_changed": False,
+            "dataset": dataset,
+            "current_model_weights": active_weights,
+            "recommendations": recommendations,
+            "summary": {
+                "dataset_confidence": dataset_confidence,
+                "increase_candidates": len(increase),
+                "reduction_candidates": len(reduce),
+                "hold_candidates": len(hold),
+                "net_recommended_weight_change": net_change,
+                "top_increase_candidates": sorted(
+                    increase,
+                    key=lambda item: _to_float(item.get("change")),
+                    reverse=True,
+                )[:5],
+                "top_reduction_candidates": sorted(
+                    reduce,
+                    key=lambda item: _to_float(item.get("change")),
+                )[:5],
+            },
+            "report_execution": "reused_factor_effectiveness",
+            "safety_note": (
+                "Learning Report recommendations reuse the factor-effectiveness "
+                "analysis already calculated for this request. Production weights "
+                "are unchanged; only the Promotion Controller can authorise a "
+                "production change."
+            ),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "provider": "RRT Predictor",
+            "recommendation_version": REPORT_VERSION,
+            "report": "weight_recommendations",
+            "error": str(error),
+        }
+
+
 def get_learning_recommendations() -> Dict[str, Any]:
     try:
         from promotion_engine import get_promotion_status
@@ -1645,7 +1820,9 @@ def get_learning_recommendations() -> Dict[str, Any]:
             best_simulations,
         )
         weight_recommendations = _apply_speed_report_override(
-            get_weight_recommendations(),
+            _learning_weight_recommendations_from_factor_report(
+                factor_effectiveness
+            ),
             speed_calibration,
         )
 
