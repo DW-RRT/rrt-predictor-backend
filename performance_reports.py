@@ -2219,7 +2219,19 @@ def generate_learning_report_html() -> str:
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: {escape(str(report.get("promotion_mode") or "unknown").upper())} | Automatic Weight Changes: {"ENABLED" if report.get("automatic_weight_changes_enabled") else "DISABLED"}</span>',
         '<h2>Dataset Audit</h2>',
         _html_audit_panels(dataset),
-        '<div class="note"><strong>Selection-depth comparison:</strong> Top 3 / Top 4 / Top 5 winner coverage is shown in the Selection Intelligence section below. Dataset Audit remains focused on compact production and dataset health metrics.</div>',
+        '<h2>Selection Intelligence</h2>',
+        '<div class="note">Selection Intelligence v2.22.2 analyses completed native full-field races across Top 1 to Top 5 selection depth. Top 3 is the retail-focus comparison; Top 4 and Top 5 show the additional winner coverage gained by broadening the displayed selections. Analysis remains evidence-only and does not change production prediction logic.</div>',
+        _html_selection_depth(selection_summary),
+        _html_table(['Metric','Value'], [
+            ['Near Miss Rate', selection_summary.get('near_miss_rate')],
+            ['Boundary Miss Rate', selection_summary.get('boundary_miss_rate')],
+            ['Roughie-like Winner Rate', selection_summary.get('roughie_like_winner_rate')],
+            ['Average False Positives / Race', selection_summary.get('avg_false_positives_per_race')]
+        ]),
+        _html_table(['Priority','Area','Recommendation','Evidence'], [
+            [i.get('priority'), i.get('area'), i.get('recommendation'), i.get('evidence')]
+            for i in selection_recommendations[:8]
+        ]),
         '<div class="note"><strong>Trifecta:</strong> v2.22.2 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
@@ -2276,19 +2288,6 @@ def generate_learning_report_html() -> str:
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
-        '<h2>Selection Intelligence</h2>',
-        '<div class="note">Selection Intelligence v2.22.2 analyses completed native full-field races across Top 1 to Top 5 selection depth, Top 3 versus Top 5 incremental coverage, boundary misses, value/roughie winners, false positives and factor gaps. Its evidence remains analysis-only and feeds the controlled promotion gate.</div>',
-        _html_selection_depth(selection_summary),
-        _html_table(['Metric','Value'], [
-            ['Near Miss Rate', selection_summary.get('near_miss_rate')],
-            ['Boundary Miss Rate', selection_summary.get('boundary_miss_rate')],
-            ['Roughie-like Winner Rate', selection_summary.get('roughie_like_winner_rate')],
-            ['Average False Positives / Race', selection_summary.get('avg_false_positives_per_race')]
-        ]),
-        _html_table(['Priority','Area','Recommendation','Evidence'], [
-            [i.get('priority'), i.get('area'), i.get('recommendation'), i.get('evidence')]
-            for i in selection_recommendations[:8]
-        ]),
         '<h2>Normalised Speed Rating</h2>',
         '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight remains active at 10% in the current production weight set while live monitoring continues.</p>',
         _html_table(['Metric','Value'], [

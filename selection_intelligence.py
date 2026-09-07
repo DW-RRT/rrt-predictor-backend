@@ -77,13 +77,135 @@ def _load_completed_rows(
             track_record_score, distance_record_score, track_distance_record_score,
             track_condition_score, trainer_score, jockey_score, trainer_jockey_score,
             barrier_score, weight_score, market_score, speed_score, actual_position, actual_price,
-            hit_win, hit_place, factor_json
+            hit_win, hit_place
         FROM rrt_runner_factor_snapshots
         WHERE {" AND ".join(where_parts)}
         ORDER BY meeting_date ASC, meeting_id ASC, race_number ASC, final_score DESC, runner_name ASC;
         """,
         tuple(params),
     )
+
+
+def _load_selection_depth_summary(
+    min_meeting_date: Optional[str] = None,
+    max_meeting_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Lightweight PostgreSQL aggregation for Top 1-5 winner coverage.
+
+    It mirrors the production ranking order used by _rank_race while avoiding
+    a full Python materialisation simply to calculate selection-depth metrics.
+    """
+    where_parts = [
+        "actual_position IS NOT NULL",
+        "meeting_id IS NOT NULL",
+        "race_number IS NOT NULL",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0','2.22.1','2.22.2')",
+    ]
+    params: List[Any] = []
+
+    if min_meeting_date:
+        where_parts.append("meeting_date >= %s")
+        params.append(min_meeting_date)
+
+    if max_meeting_date:
+        where_parts.append("meeting_date <= %s")
+        params.append(max_meeting_date)
+
+    row = fetch_one(
+        f"""
+        WITH ranked AS (
+            SELECT
+                meeting_id,
+                race_number,
+                meeting_date,
+                runner_name,
+                actual_position,
+                COUNT(*) OVER (
+                    PARTITION BY meeting_id, race_number
+                ) AS runner_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY meeting_id, race_number
+                    ORDER BY
+                        final_score DESC NULLS LAST,
+                        confidence DESC NULLS LAST,
+                        market_price ASC NULLS LAST,
+                        runner_name ASC
+                ) AS rrt_rank
+            FROM rrt_runner_factor_snapshots
+            WHERE {" AND ".join(where_parts)}
+        ),
+        race_winners AS (
+            SELECT
+                meeting_id,
+                race_number,
+                MAX(meeting_date) AS meeting_date,
+                MAX(runner_count) AS runner_count,
+                MIN(rrt_rank) FILTER (WHERE actual_position = 1) AS winner_rank
+            FROM ranked
+            GROUP BY meeting_id, race_number
+        ),
+        eligible AS (
+            SELECT *
+            FROM race_winners
+            WHERE runner_count >= 4
+              AND winner_rank IS NOT NULL
+        )
+        SELECT
+            (SELECT COUNT(*) FROM ranked) AS runner_rows,
+            (SELECT COUNT(*) FROM race_winners) AS all_completed_races,
+            COUNT(*) AS race_count,
+            MIN(meeting_date) AS min_meeting_date,
+            MAX(meeting_date) AS max_meeting_date,
+            COUNT(*) FILTER (WHERE winner_rank <= 1) AS top1_hit_count,
+            COUNT(*) FILTER (WHERE winner_rank <= 2) AS top2_hit_count,
+            COUNT(*) FILTER (WHERE winner_rank <= 3) AS top3_hit_count,
+            COUNT(*) FILTER (WHERE winner_rank <= 4) AS top4_hit_count,
+            COUNT(*) FILTER (WHERE winner_rank <= 5) AS top5_hit_count,
+            COUNT(*) FILTER (WHERE winner_rank = 4) AS rank4_incremental_winners,
+            COUNT(*) FILTER (WHERE winner_rank = 5) AS rank5_incremental_winners
+        FROM eligible;
+        """,
+        tuple(params),
+    ) or {}
+
+    race_count = _to_int(row.get("race_count"))
+    top1 = _to_int(row.get("top1_hit_count"))
+    top2 = _to_int(row.get("top2_hit_count"))
+    top3 = _to_int(row.get("top3_hit_count"))
+    top4 = _to_int(row.get("top4_hit_count"))
+    top5 = _to_int(row.get("top5_hit_count"))
+    rank4 = _to_int(row.get("rank4_incremental_winners"))
+    rank5 = _to_int(row.get("rank5_incremental_winners"))
+    all_completed_races = _to_int(row.get("all_completed_races"))
+
+    def pct(value: int) -> float:
+        return round((value / race_count) * 100, 2) if race_count else 0.0
+
+    return {
+        "runner_rows": _to_int(row.get("runner_rows")),
+        "race_count": race_count,
+        "all_completed_races": all_completed_races,
+        "excluded_partial_races": max(all_completed_races - race_count, 0),
+        "min_meeting_date": row.get("min_meeting_date"),
+        "max_meeting_date": row.get("max_meeting_date"),
+        "top1_hit_count": top1,
+        "top1_hit_rate": pct(top1),
+        "top2_hit_count": top2,
+        "top2_hit_rate": pct(top2),
+        "top3_hit_count": top3,
+        "top3_hit_rate": pct(top3),
+        "top4_hit_count": top4,
+        "top4_hit_rate": pct(top4),
+        "top5_hit_count": top5,
+        "top5_hit_rate": pct(top5),
+        "rank4_incremental_winners": rank4,
+        "rank5_incremental_winners": rank5,
+        "top4_incremental_gain_vs_top3": pct(top4 - top3),
+        "top5_incremental_gain_vs_top4": pct(top5 - top4),
+        "top5_incremental_gain_vs_top3": pct(top5 - top3),
+        "ranks4_5_incremental_winners": top5 - top3,
+    }
 
 
 def _group_by_race(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -400,6 +522,10 @@ def run_selection_intelligence_analysis(
     save_result: bool = True,
 ) -> Dict[str, Any]:
     try:
+        depth_summary = _load_selection_depth_summary(
+            min_meeting_date=min_meeting_date,
+            max_meeting_date=max_meeting_date,
+        )
         rows = _load_completed_rows(min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date)
         grouped_all = _group_by_race(rows)
         grouped = {key: value for key, value in grouped_all.items() if len(value) >= 4}
@@ -469,34 +595,35 @@ def run_selection_intelligence_analysis(
             "prediction_model_changed": False,
             "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
             "dataset": {
-                "runner_rows": len(rows),
-                "race_count": race_count,
-                "min_meeting_date": min((row.get("meeting_date") for row in rows if row.get("meeting_date") is not None), default=None),
-                "max_meeting_date": max((row.get("meeting_date") for row in rows if row.get("meeting_date") is not None), default=None),
+                "runner_rows": depth_summary.get("runner_rows", len(rows)),
+                "race_count": depth_summary.get("race_count", race_count),
+                "min_meeting_date": depth_summary.get("min_meeting_date"),
+                "max_meeting_date": depth_summary.get("max_meeting_date"),
                 "capture_scope": "native_full_field_completed_only",
-                "excluded_partial_races": excluded_partial_races,
+                "excluded_partial_races": depth_summary.get("excluded_partial_races", excluded_partial_races),
             },
             "summary": {
-                "top1_hit_count": top1_hit_count,
-                "top1_hit_rate": round((top1_hit_count / race_count) * 100, 2) if race_count else 0.0,
-                "top2_hit_count": top2_hit_count,
-                "top2_hit_rate": round((top2_hit_count / race_count) * 100, 2) if race_count else 0.0,
-                "top3_hit_count": top3_hit_count,
-                "top3_hit_rate": round((top3_hit_count / race_count) * 100, 2) if race_count else 0.0,
-                "top4_hit_count": hit_count,
+                "top1_hit_count": depth_summary.get("top1_hit_count", top1_hit_count),
+                "top1_hit_rate": depth_summary.get("top1_hit_rate", round((top1_hit_count / race_count) * 100, 2) if race_count else 0.0),
+                "top2_hit_count": depth_summary.get("top2_hit_count", top2_hit_count),
+                "top2_hit_rate": depth_summary.get("top2_hit_rate", round((top2_hit_count / race_count) * 100, 2) if race_count else 0.0),
+                "top3_hit_count": depth_summary.get("top3_hit_count", top3_hit_count),
+                "top3_hit_rate": depth_summary.get("top3_hit_rate", round((top3_hit_count / race_count) * 100, 2) if race_count else 0.0),
+                "top4_hit_count": depth_summary.get("top4_hit_count", hit_count),
                 "top4_miss_count": miss_count,
-                "top4_hit_rate": round((hit_count / race_count) * 100, 2) if race_count else 0.0,
+                "top4_hit_rate": depth_summary.get("top4_hit_rate", round((hit_count / race_count) * 100, 2) if race_count else 0.0),
                 "top4_miss_rate": round((miss_count / race_count) * 100, 2) if race_count else 0.0,
-                "top5_hit_count": top5_hit_count,
+                "top5_hit_count": depth_summary.get("top5_hit_count", top5_hit_count),
                 "top5_miss_count": top5_miss_count,
-                "top5_hit_rate": round((top5_hit_count / race_count) * 100, 2) if race_count else 0.0,
+                "top5_hit_rate": depth_summary.get("top5_hit_rate", round((top5_hit_count / race_count) * 100, 2) if race_count else 0.0),
                 "top5_miss_rate": round((top5_miss_count / race_count) * 100, 2) if race_count else 0.0,
-                "rank5_incremental_winners": boundary_miss_count,
-                "rank5_incremental_coverage_rate": round((boundary_miss_count / race_count) * 100, 2) if race_count else 0.0,
-                "top5_incremental_gain_vs_top4": round(((top5_hit_count - hit_count) / race_count) * 100, 2) if race_count else 0.0,
-                "top4_incremental_gain_vs_top3": round(((hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0,
-                "top5_incremental_gain_vs_top3": round(((top5_hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0,
-                "ranks4_5_incremental_winners": top5_hit_count - top3_hit_count,
+                "rank4_incremental_winners": depth_summary.get("rank4_incremental_winners"),
+                "rank5_incremental_winners": depth_summary.get("rank5_incremental_winners", boundary_miss_count),
+                "rank5_incremental_coverage_rate": depth_summary.get("top5_incremental_gain_vs_top4", round((boundary_miss_count / race_count) * 100, 2) if race_count else 0.0),
+                "top5_incremental_gain_vs_top4": depth_summary.get("top5_incremental_gain_vs_top4", round(((top5_hit_count - hit_count) / race_count) * 100, 2) if race_count else 0.0),
+                "top4_incremental_gain_vs_top3": depth_summary.get("top4_incremental_gain_vs_top3", round(((hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0),
+                "top5_incremental_gain_vs_top3": depth_summary.get("top5_incremental_gain_vs_top3", round(((top5_hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0),
+                "ranks4_5_incremental_winners": depth_summary.get("ranks4_5_incremental_winners", top5_hit_count - top3_hit_count),
                 "near_miss_count": near_miss_count,
                 "boundary_miss_count": boundary_miss_count,
                 "near_miss_rate": round((near_miss_count / race_count) * 100, 2) if race_count else 0.0,
