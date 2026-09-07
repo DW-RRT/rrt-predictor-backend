@@ -157,7 +157,7 @@ from profile_cache_engine import (
 
 app = FastAPI(
     title="RRT Predictor Backend",
-    version="2.22.1",
+    version="2.22.2",
 )
 
 app.add_middleware(
@@ -880,10 +880,10 @@ def root():
         "app": "RRT Predictor Backend",
         "status": "running",
         "source": "Stored Excel Database + TAB Web + Racing Australia",
-        "version": "2.22.1",
+        "version": "2.22.2",
         "app_version": "1.0.0",
-        "backend_version": "2.22.1",
-        "model_version": "2.22.1",
+        "backend_version": "2.22.2",
+        "model_version": "2.22.2",
     }
 
 
@@ -893,10 +893,10 @@ def health():
         "status": "ok",
         "source": "RRT Predictor Live Race Data",
         "provider": "Race Data API",
-        "version": "2.22.1",
+        "version": "2.22.2",
         "app_version": "1.0.0",
-        "backend_version": "2.22.1",
-        "model_version": "2.22.1",
+        "backend_version": "2.22.2",
+        "model_version": "2.22.2",
         "cache_ttl_seconds": 300
     }
 
@@ -994,10 +994,10 @@ def api_route_check():
     return {
         "success": all(route_availability.values()),
         "app": "RRT Predictor Backend",
-        "version": "2.22.1",
+        "version": "2.22.2",
         "app_version": "1.0.0",
-        "backend_version": "2.22.1",
-        "model_version": "2.22.1",
+        "backend_version": "2.22.2",
+        "model_version": "2.22.2",
         "database_schema_version": "2.21.0",
         "required_routes": route_availability,
         "postgres_routes_available": all(
@@ -1105,7 +1105,7 @@ def api_route_check():
     }
 
 # ---------------------------------------------------------------------
-# Historical Profile Intelligence Routes - RRT Predictor v2.22.1
+# Historical Profile Intelligence Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/profiles/summary")
@@ -1218,7 +1218,7 @@ async def api_import_historical_performance(
         }
 
 # ---------------------------------------------------------------------
-# Performance Reporting Routes - RRT Predictor v2.22.1
+# Performance Reporting Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/reports/overall")
@@ -1265,7 +1265,7 @@ def api_report_systems_html():
 
 
 # ---------------------------------------------------------------------
-# Performance Analytics Routes - RRT Predictor v2.22.1
+# Performance Analytics Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/analytics/summary")
@@ -1304,7 +1304,7 @@ def api_analytics_learning_readiness():
 
 
 # ---------------------------------------------------------------------
-# Learning Centre Routes - RRT Predictor v2.22.1
+# Learning Centre Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/learning/recommendations")
@@ -1342,7 +1342,7 @@ def api_learning_report_pdf():
 
 
 # ---------------------------------------------------------------------
-# Factor Capture Routes - RRT Predictor v2.22.1
+# Factor Capture Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/speed-rating/summary")
@@ -1371,7 +1371,7 @@ def api_factor_capture_summary():
 
 
 # ---------------------------------------------------------------------
-# Evidence-Based Factor Analysis Routes - RRT Predictor v2.22.1
+# Evidence-Based Factor Analysis Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/analysis/factor-effectiveness")
@@ -1390,12 +1390,12 @@ def api_analysis_factor_trends(
 def api_analysis_weight_recommendations():
     report = get_weight_recommendations()
     if isinstance(report, dict):
-        report["recommendation_version"] = "2.22.1"
+        report["recommendation_version"] = "2.22.2"
         report["analysis_only"] = True
         report["prediction_model_changed"] = False
         report["safety_note"] = (
             "Recommendations are measured against the active calibrated production weights. "
-            "They are evaluated through the v2.22.1 Promotion Controller; production weights change only when the configured promotion gates pass and live mode is authorised."
+            "They are evaluated through the v2.22.2 Promotion Controller; production weights change only when the configured promotion gates pass and live mode is authorised."
         )
     return report
 
@@ -1421,12 +1421,12 @@ def api_simulator_no_market_comparison(min_meeting_date: Optional[str]=Query(Non
     return run_no_market_comparison(min_meeting_date=min_meeting_date, max_meeting_date=max_meeting_date)
 
 # ---------------------------------------------------------------------
-# Historical Weight Simulation Routes - RRT Predictor v2.22.1
+# Historical Weight Simulation Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/simulator/run")
 def api_simulator_run(
-    simulation_name: str = Query("v2.22.1 analysis-only simulation"),
+    simulation_name: str = Query("v2.22.2 analysis-only simulation"),
     notes: str = Query(""),
     min_meeting_date: Optional[str] = Query(None),
     max_meeting_date: Optional[str] = Query(None),
@@ -1515,12 +1515,12 @@ def api_model_weights():
     active_weights = active.get("weights_json") or {}
     rollback_weights = rollback.get("weights_json") or {}
     promotion_status = get_promotion_status()
-    return {"success":True,"model_version":"2.22.1","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":bool(promotion_status.get("automatic_weight_changes_enabled")),"promotion_mode":promotion_status.get("promotion_mode"),"shadow_mode_active":promotion_status.get("shadow_mode_active"),"last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
+    return {"success":True,"model_version":"2.22.2","active_weight_set":active.get("model_version"),"active_weights":active_weights,"rollback_weight_set":rollback.get("model_version"),"rollback_weights":rollback_weights,"active_weight_total":round(sum(float(v) for v in active_weights.values()),2) if active_weights else 0.0,"rollback_weight_total":round(sum(float(v) for v in rollback_weights.values()),2) if rollback_weights else 0.0,"automatic_weight_changes_enabled":bool(promotion_status.get("automatic_weight_changes_enabled")),"promotion_mode":promotion_status.get("promotion_mode"),"shadow_mode_active":promotion_status.get("shadow_mode_active"),"last_promoted_by_cycle_id":active.get("promoted_by_cycle_id")}
 
 @app.get("/api/model/promotion-audit")
 def api_model_promotion_audit(limit: int = Query(20)):
     rows = fetch_all("SELECT promotion_id,cycle_id,from_weight_set,to_weight_set,decision,applied,rollback_available,created_at FROM rrt_weight_promotion_audit ORDER BY created_at DESC LIMIT %s;", (max(1,min(limit,100)),))
-    return {"success":True,"model_version":"2.22.1","audit_count":len(rows),"audits":rows}
+    return {"success":True,"model_version":"2.22.2","audit_count":len(rows),"audits":rows}
 
 @app.get("/api/model/promotion-status")
 def api_model_promotion_status():
@@ -1535,7 +1535,7 @@ def api_model_candidates(limit: int = Query(20)):
 @app.post("/api/model/run-promotion-cycle")
 def api_model_run_promotion_cycle(
     cycle_id: Optional[str] = Query(None),
-    candidate_name: str = Query("v2.22.1 autonomous promotion candidate"),
+    candidate_name: str = Query("v2.22.2 autonomous promotion candidate"),
 ):
     return run_promotion_cycle(cycle_id=cycle_id, candidate_name=candidate_name, save_result=True)
 
@@ -1564,7 +1564,7 @@ def api_simulator_best(limit: int = Query(10)):
 
 
 # ---------------------------------------------------------------------
-# Selection Intelligence Routes - RRT Predictor v2.22.1
+# Selection Intelligence Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/selection-intelligence/run")
@@ -1605,12 +1605,12 @@ def api_selection_intelligence_category_analysis():
 
 
 # ---------------------------------------------------------------------
-# Native Adaptive Learning Routes - RRT Predictor v2.22.1
+# Native Adaptive Learning Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/adaptive-learning/run")
 def api_adaptive_learning_run(
-    cycle_name: str = Query("v2.22.1 autonomous adaptive learning cycle"),
+    cycle_name: str = Query("v2.22.2 autonomous adaptive learning cycle"),
 ):
     return run_adaptive_learning_cycle(cycle_name=cycle_name, save_result=True)
 
@@ -1636,12 +1636,12 @@ def api_adaptive_learning_summary():
 
 
 # ---------------------------------------------------------------------
-# Historical Replay Engine Routes - RRT Predictor v2.22.1
+# Historical Replay Engine Routes - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 @app.get("/api/replay/run")
 def api_replay_run(
-    replay_name: str = Query("v2.22.1 production-versus-candidate replay"),
+    replay_name: str = Query("v2.22.2 production-versus-candidate replay"),
     min_meeting_date: Optional[str] = Query(None),
     max_meeting_date: Optional[str] = Query(None),
     model_version: Optional[str] = Query(None),
@@ -2010,7 +2010,7 @@ def api_predict(
 
 
 # ---------------------------------------------------------------------
-# Punting Form Results / Accuracy helpers (RRT Predictor v2.22.1)
+# Punting Form Results / Accuracy helpers (RRT Predictor v2.22.2)
 # ---------------------------------------------------------------------
 
 def _normalise_runner_name(value: Any) -> str:
@@ -2144,7 +2144,7 @@ def _save_prediction_snapshot(
         "provider": prediction_response.get("provider"),
         "source": prediction_response.get("source"),
         "prediction_type": prediction_response.get("prediction_type"),
-        "model_version": "2.22.1",
+        "model_version": "2.22.2",
         "meeting_date": prediction_response.get("meeting_date"),
         "track": prediction_response.get("track"),
         "track_condition": prediction_response.get("track_condition"),
@@ -2431,7 +2431,7 @@ def _compare_prediction_to_results(
     return {
         "success": True,
         "provider": "Punting Form",
-        "source": "RRT Predictor v2.22.1 Single-Factor Historical Simulation Suite",
+        "source": "RRT Predictor v2.22.2 Single-Factor Historical Simulation Suite",
         "meeting_id": prediction_snapshot.get("meeting_id"),
         "track": results.get("track") or prediction_snapshot.get("track"),
         "meeting_date": results.get("meeting_date") or prediction_snapshot.get("meeting_date"),
@@ -2472,7 +2472,7 @@ def _compare_prediction_to_results(
 
 
 # ---------------------------------------------------------------------
-# Trifecta result audit / backfill - RRT Predictor v2.22.1
+# Trifecta result audit / backfill - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 def _trifecta_result_history_summary() -> Dict[str, Any]:
@@ -2522,7 +2522,7 @@ def _trifecta_result_history_summary() -> Dict[str, Any]:
 
         return {
             "success": True,
-            "trifecta_version": "2.22.1",
+            "trifecta_version": "2.22.2",
             "analysis": "meeting_level_box_trifecta_history",
             "summary": summary,
             "eligible_missing_history": int(eligible_missing.get("count") or 0),
@@ -2535,7 +2535,7 @@ def _trifecta_result_history_summary() -> Dict[str, Any]:
     except Exception as error:
         return {
             "success": False,
-            "trifecta_version": "2.22.1",
+            "trifecta_version": "2.22.2",
             "analysis": "meeting_level_box_trifecta_history",
             "error": str(error),
         }
@@ -2543,7 +2543,7 @@ def _trifecta_result_history_summary() -> Dict[str, Any]:
 
 def _backfill_trifecta_result_history(limit: int = 100) -> Dict[str, Any]:
     """
-    Populate missing v2.22.1 meeting-level Trifecta outcomes from already-saved
+    Populate missing v2.22.2 meeting-level Trifecta outcomes from already-saved
     prediction and result snapshots. No external API call is made.
 
     Existing non-null Trifecta history is never overwritten.
@@ -2664,7 +2664,7 @@ def _backfill_trifecta_result_history(limit: int = 100) -> Dict[str, Any]:
 
         return {
             "success": True,
-            "trifecta_version": "2.22.1",
+            "trifecta_version": "2.22.2",
             "backfill": "saved_prediction_and_result_snapshots_only",
             "requested_limit": safe_limit,
             "eligible_rows_selected": len(rows),
@@ -2679,7 +2679,7 @@ def _backfill_trifecta_result_history(limit: int = 100) -> Dict[str, Any]:
     except Exception as error:
         return {
             "success": False,
-            "trifecta_version": "2.22.1",
+            "trifecta_version": "2.22.2",
             "backfill": "saved_prediction_and_result_snapshots_only",
             "error": str(error),
         }
@@ -2687,7 +2687,7 @@ def _backfill_trifecta_result_history(limit: int = 100) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------
-# Automatic Results Processor - RRT Predictor v2.22.1
+# Automatic Results Processor - RRT Predictor v2.22.2
 # ---------------------------------------------------------------------
 
 def _process_single_meeting_results(
@@ -2698,7 +2698,7 @@ def _process_single_meeting_results(
     prediction_source = "memory"
 
     if not prediction_snapshot:
-        requested_model_version = str(model_version or "2.22.1")
+        requested_model_version = str(model_version or "2.22.2")
         postgres_prediction = load_prediction_snapshot_from_postgres(
             meeting_id=meeting_id,
             model_version=requested_model_version,
@@ -2708,7 +2708,7 @@ def _process_single_meeting_results(
             return {
                 "success": False,
                 "provider": "RRT Predictor",
-                "source": "RRT Predictor v2.22.1 Automatic Results Processor",
+                "source": "RRT Predictor v2.22.2 Automatic Results Processor",
                 "meeting_id": meeting_id,
                 "status": "prediction_missing",
                 "message": "No stored prediction found in memory or PostgreSQL.",
@@ -2901,7 +2901,7 @@ def _run_autonomous_control_if_due(results_run: Dict[str, Any]) -> Dict[str, Any
 
     try:
         learning = run_adaptive_learning_cycle(
-            cycle_name="v2.22.1 autonomous adaptive learning cycle",
+            cycle_name="v2.22.2 autonomous adaptive learning cycle",
             save_result=True,
         )
         cycle_id = learning.get("cycle_id")
@@ -2917,7 +2917,7 @@ def _run_autonomous_control_if_due(results_run: Dict[str, Any]) -> Dict[str, Any
 
         promotion = run_promotion_cycle(
             cycle_id=cycle_id,
-            candidate_name="v2.22.1 autonomous adaptive promotion candidate",
+            candidate_name="v2.22.2 autonomous adaptive promotion candidate",
             save_result=True,
         )
         gate = promotion.get("promotion_gate") or {}
@@ -3182,7 +3182,7 @@ def api_punting_form_predict(
                 "factor_capture_message": factor_history.get("message"),
                 "factor_capture_error": factor_history.get("error"),
                 "model_version": snapshot.get("model_version"),
-                "note": "v2.22.1 persistence status is reported from the actual PostgreSQL save response; runner-factor capture is reported separately.",
+                "note": "v2.22.2 persistence status is reported from the actual PostgreSQL save response; runner-factor capture is reported separately.",
             }
 
         public_build_started = time.perf_counter()
@@ -3199,7 +3199,7 @@ def api_punting_form_predict(
             flush=True,
         )
 
-        # v2.22.1 retained optimisation: refresh profile caches after the compact
+        # v2.22.2 retained optimisation: refresh profile caches after the compact
         # prediction response is returned, rather than blocking the live request.
         if prediction_response.get("success"):
             background_tasks.add_task(
@@ -3299,7 +3299,7 @@ def api_punting_form_performance(
         return {
             "success": False,
             "provider": "RRT Predictor",
-            "source": "RRT Predictor v2.22.1 Single-Factor Historical Simulation Suite",
+            "source": "RRT Predictor v2.22.2 Single-Factor Historical Simulation Suite",
             "meeting_id": meeting_id,
             "error": str(error),
         }

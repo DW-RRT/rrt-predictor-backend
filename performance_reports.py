@@ -13,11 +13,11 @@ from selection_intelligence import get_latest_selection_analysis
 from profile_cache_engine import get_historical_horse_leaderboard, get_strike_rate_leaderboard, get_profile_cache_summary
 
 
-REPORT_VERSION = "2.22.1"
-ANALYTICS_VERSION = "2.22.1"
+REPORT_VERSION = "2.22.2"
+ANALYTICS_VERSION = "2.22.2"
 DATABASE_SCHEMA_VERSION = "2.21.0"
-MODEL_VERSION = "2.22.1"
-LEARNING_VERSION = "2.22.1"
+MODEL_VERSION = "2.22.2"
+LEARNING_VERSION = "2.22.2"
 
 
 
@@ -2155,12 +2155,22 @@ def generate_learning_report_html() -> str:
         '<div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>',
         f'<h1>RRT Predictor Learning Report</h1><p class="subtitle">Version {LEARNING_VERSION} | Generated {escape(report.get("generated_at") or "")}</p>',
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: {escape(str(report.get("promotion_mode") or "unknown").upper())} | Automatic Weight Changes: {"ENABLED" if report.get("automatic_weight_changes_enabled") else "DISABLED"}</span>',
-        '<h2>Dataset Audit</h2><div class="grid">',
-        card('Meetings', dataset.get('meeting_count')), card('Races', dataset.get('race_count')), card('Tracks', dataset.get('unique_tracks')), card('Dates', dataset.get('unique_dates')),
-        card('Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))), card('Top Win', _pct(dataset.get('avg_top_win_strike_rate'))), card('Each Way', _pct(dataset.get('avg_each_way_strike_rate'))), card('Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))),
-        card('Double', _pct(dataset.get('avg_double_strike_rate'))), card('Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))), card('Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'), card('RRT v Race Data AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))),
-        '</div>',
-        '<div class="note"><strong>Trifecta:</strong> v2.22.1 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
+        '<h2>Dataset Audit</h2>',
+        _html_table(['Dataset Coverage','Value'], [
+            ['Meetings', dataset.get('meeting_count')], ['Races', dataset.get('race_count')],
+            ['Unique Tracks', dataset.get('unique_tracks')], ['Unique Dates', dataset.get('unique_dates')]
+        ]),
+        _html_table(['Performance Metric','Rate'], [
+            ['Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))],
+            ['Top Win', _pct(dataset.get('avg_top_win_strike_rate'))],
+            ['Each Way', _pct(dataset.get('avg_each_way_strike_rate'))],
+            ['Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))],
+            ['Double', _pct(dataset.get('avg_double_strike_rate'))],
+            ['Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))],
+            ['Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'],
+            ['RRT v Race Data AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))]
+        ]),
+        '<div class="note"><strong>Trifecta:</strong> v2.22.2 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
         _html_table(['Metric','Value'], [['Readiness Score', ((report.get('model_health') or {}).get('readiness') or {}).get('score')], ['Dataset Maturity', ((report.get('model_health') or {}).get('readiness') or {}).get('maturity')], ['Next Action', (report.get('model_health') or {}).get('recommended_next_action')]]),
@@ -2217,9 +2227,18 @@ def generate_learning_report_html() -> str:
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
-        '<div class="note">Selection Intelligence v2.22.1 analyses completed native full-field races for Top 4 boundary misses, value/roughie winners, false positives and factor gaps. Its evidence feeds the controlled promotion gate.</div>',
+        '<div class="note">Selection Intelligence v2.22.2 analyses completed native full-field races across Top 1 to Top 5 selection depth, Top 3 versus Top 5 incremental coverage, boundary misses, value/roughie winners, false positives and factor gaps. Its evidence remains analysis-only and feeds the controlled promotion gate.</div>',
+        _html_table(['Selection Depth','Winner Coverage'], [
+            ['Top 1', _pct(selection_summary.get('top1_hit_rate'))],
+            ['Top 2', _pct(selection_summary.get('top2_hit_rate'))],
+            ['Top 3', _pct(selection_summary.get('top3_hit_rate'))],
+            ['Top 4', _pct(selection_summary.get('top4_hit_rate'))],
+            ['Top 5', _pct(selection_summary.get('top5_hit_rate'))],
+            ['Top 4 Gain vs Top 3', _pct(selection_summary.get('top4_incremental_gain_vs_top3'))],
+            ['Top 5 Gain vs Top 3', _pct(selection_summary.get('top5_incremental_gain_vs_top3'))],
+            ['Winners Added by Ranks 4-5', selection_summary.get('ranks4_5_incremental_winners')],
+        ]),
         _html_table(['Metric','Value'], [
-            ['Top 4 Hit Rate', selection_summary.get('top4_hit_rate')],
             ['Near Miss Rate', selection_summary.get('near_miss_rate')],
             ['Boundary Miss Rate', selection_summary.get('boundary_miss_rate')],
             ['Roughie-like Winner Rate', selection_summary.get('roughie_like_winner_rate')],

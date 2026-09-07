@@ -5,8 +5,8 @@ from datetime import datetime
 from database import fetch_all, fetch_one, execute_sql
 
 
-SELECTION_INTELLIGENCE_VERSION = "2.22.0"
-MODEL_VERSION = "2.22.0"
+SELECTION_INTELLIGENCE_VERSION = "2.22.2"
+MODEL_VERSION = "2.22.2"
 
 
 FACTOR_COLUMNS = [
@@ -56,7 +56,7 @@ def _load_completed_rows(
         "actual_position IS NOT NULL",
         "meeting_id IS NOT NULL",
         "race_number IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0','2.22.1','2.22.2')",
     ]
     params: List[Any] = []
 
@@ -168,6 +168,9 @@ def _miss_reason(winner: Dict[str, Any], top4: List[Dict[str, Any]]) -> List[str
 
 def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     ranked = _rank_race(rows)
+    top1 = ranked[:1]
+    top2 = ranked[:2]
+    top3 = ranked[:3]
     top4 = ranked[:4]
     top5 = ranked[:5]
     winner = next((item for item in ranked if _to_int(item.get("actual_position")) == 1), None)
@@ -176,6 +179,9 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {}
 
     winner_rank = _to_int(winner.get("rrt_rank"))
+    top1_hit = winner_rank <= 1
+    top2_hit = winner_rank <= 2
+    top3_hit = winner_rank <= 3
     top4_hit = winner_rank <= 4
     top5_hit = winner_rank <= 5
     near_miss = 5 <= winner_rank <= 8
@@ -203,6 +209,9 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "market_rank": winner.get("market_rank"),
             "actual_price": winner.get("actual_price"),
         },
+        "top1_hit": top1_hit,
+        "top2_hit": top2_hit,
+        "top3_hit": top3_hit,
         "top4_hit": top4_hit,
         "top5_hit": top5_hit,
         "rank5_incremental_hit": winner_rank == 5,
@@ -314,7 +323,7 @@ def _build_selection_recommendations(
             "area": "Top 4 Boundary",
             "recommendation": "Test controlled promotion rules within the Top 20, prioritising runners ranked 5th to 8th where factor evidence is strong.",
             "evidence": f"{near_miss_count} races had winners ranked 5th to 8th.",
-            "next_step": "Use the v2.22.0 aligned simulator to validate selection and weight changes before any production change.",
+            "next_step": "Use the v2.22.2 aligned simulator to validate selection and weight changes before any production change.",
         })
 
     if boundary_rate >= 0.04:
@@ -352,7 +361,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} should influence selection promotion more strongly.",
                 "evidence": f"Missed winners averaged {avg_gap} points stronger than Top 4 selections on this factor.",
-                "next_step": "Use the v2.22.0 promotion gate to test candidate changes before production use.",
+                "next_step": "Use the v2.22.2 promotion gate to test candidate changes before production use.",
             })
         elif avg_gap <= -3:
             recommendations.append({
@@ -360,7 +369,7 @@ def _build_selection_recommendations(
                 "area": factor.get("label"),
                 "recommendation": f"Review whether {factor.get('label')} is suppressing winners or over-rewarding false positives.",
                 "evidence": f"Missed winners averaged {avg_gap} points weaker than Top 4 selections on this factor.",
-                "next_step": "Use the v2.22.0 promotion gate to test controlled reduction or gating rules.",
+                "next_step": "Use the v2.22.2 promotion gate to test controlled reduction or gating rules.",
             })
 
     if not recommendations:
@@ -392,6 +401,9 @@ def run_selection_intelligence_analysis(
                 race_analyses.append(analysed)
 
         race_count = len(race_analyses)
+        top1_hit_count = sum(1 for item in race_analyses if item.get("top1_hit"))
+        top2_hit_count = sum(1 for item in race_analyses if item.get("top2_hit"))
+        top3_hit_count = sum(1 for item in race_analyses if item.get("top3_hit"))
         hit_count = sum(1 for item in race_analyses if item.get("top4_hit"))
         miss_count = race_count - hit_count
         top5_hit_count = sum(1 for item in race_analyses if item.get("top5_hit"))
@@ -455,6 +467,12 @@ def run_selection_intelligence_analysis(
                 "excluded_partial_races": excluded_partial_races,
             },
             "summary": {
+                "top1_hit_count": top1_hit_count,
+                "top1_hit_rate": round((top1_hit_count / race_count) * 100, 2) if race_count else 0.0,
+                "top2_hit_count": top2_hit_count,
+                "top2_hit_rate": round((top2_hit_count / race_count) * 100, 2) if race_count else 0.0,
+                "top3_hit_count": top3_hit_count,
+                "top3_hit_rate": round((top3_hit_count / race_count) * 100, 2) if race_count else 0.0,
                 "top4_hit_count": hit_count,
                 "top4_miss_count": miss_count,
                 "top4_hit_rate": round((hit_count / race_count) * 100, 2) if race_count else 0.0,
@@ -466,6 +484,9 @@ def run_selection_intelligence_analysis(
                 "rank5_incremental_winners": boundary_miss_count,
                 "rank5_incremental_coverage_rate": round((boundary_miss_count / race_count) * 100, 2) if race_count else 0.0,
                 "top5_incremental_gain_vs_top4": round(((top5_hit_count - hit_count) / race_count) * 100, 2) if race_count else 0.0,
+                "top4_incremental_gain_vs_top3": round(((hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0,
+                "top5_incremental_gain_vs_top3": round(((top5_hit_count - top3_hit_count) / race_count) * 100, 2) if race_count else 0.0,
+                "ranks4_5_incremental_winners": top5_hit_count - top3_hit_count,
                 "near_miss_count": near_miss_count,
                 "boundary_miss_count": boundary_miss_count,
                 "near_miss_rate": round((near_miss_count / race_count) * 100, 2) if race_count else 0.0,
@@ -560,7 +581,7 @@ def get_latest_selection_analysis() -> Dict[str, Any]:
             SELECT MAX(updated_at) AS latest_completed_at
             FROM rrt_runner_factor_snapshots
             WHERE actual_position IS NOT NULL
-              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0');
+              AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0','2.22.1','2.22.2');
         """) or {}
         if (not row) or (latest_native.get("latest_completed_at") and row.get("generated_at") and row.get("generated_at") < latest_native.get("latest_completed_at")):
             return run_selection_intelligence_analysis(save_result=True)
@@ -622,6 +643,21 @@ def get_category_analysis() -> Dict[str, Any]:
         "report": "category_analysis",
         "analysis_only": True,
         "categories": {
+            "selection_depth": {
+                "top1_hit_count": summary.get("top1_hit_count"),
+                "top1_hit_rate": summary.get("top1_hit_rate"),
+                "top2_hit_count": summary.get("top2_hit_count"),
+                "top2_hit_rate": summary.get("top2_hit_rate"),
+                "top3_hit_count": summary.get("top3_hit_count"),
+                "top3_hit_rate": summary.get("top3_hit_rate"),
+                "top4_hit_count": summary.get("top4_hit_count"),
+                "top4_hit_rate": summary.get("top4_hit_rate"),
+                "top5_hit_count": summary.get("top5_hit_count"),
+                "top5_hit_rate": summary.get("top5_hit_rate"),
+                "top4_incremental_gain_vs_top3": summary.get("top4_incremental_gain_vs_top3"),
+                "top5_incremental_gain_vs_top3": summary.get("top5_incremental_gain_vs_top3"),
+                "ranks4_5_incremental_winners": summary.get("ranks4_5_incremental_winners"),
+            },
             "top5_display_baseline": {
                 "top4_hit_count": summary.get("top4_hit_count"),
                 "top4_hit_rate": summary.get("top4_hit_rate"),
