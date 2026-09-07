@@ -1942,7 +1942,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
         # Freshness is now validated and retained.
         # Track Condition and Model Health reuse the factor analysis already calculated.
         # The expensive No-Market simulation is deferred to its dedicated endpoint.
-        freshness_first_up = get_freshness_first_up_analysis()
+        freshness_first_up = _align_analysis_metadata(get_freshness_first_up_analysis())
         track_condition_audit = _learning_track_condition_audit_from_factor_report(
             factor_effectiveness
         )
@@ -2012,7 +2012,7 @@ def get_learning_recommendations() -> Dict[str, Any]:
             "selection_intelligence": _learning_latest_selection_analysis_cached(),
             "speed_calibration": speed_calibration,
             "safety_note": (
-                f"This v2.22.1 report reflects the active PostgreSQL production "
+                f"This v{REPORT_VERSION} report reflects the active PostgreSQL production "
                 f"weight set, including Normalised Speed at 10%. Promotion Controller "
                 f"mode is {promotion_status.get('promotion_mode')}. Recommendations "
                 "do not directly change production weights; only an authorised "
@@ -2034,6 +2034,68 @@ def _html_table(headers: List[str], rows: List[List[Any]]) -> str:
     for row in rows:
         trs.append("<tr>" + "".join(f"<td>{escape(str(c if c is not None else ''))}</td>" for c in row) + "</tr>")
     return "<table><thead><tr>" + th + "</tr></thead><tbody>" + "".join(trs) + "</tbody></table>"
+
+
+def _html_audit_panels(dataset: Dict[str, Any]) -> str:
+    coverage = [
+        ("Meetings", dataset.get("meeting_count")),
+        ("Races", dataset.get("race_count")),
+        ("Tracks", dataset.get("unique_tracks")),
+        ("Dates", dataset.get("unique_dates")),
+    ]
+    performance = [
+        ("Overall", _pct(dataset.get("avg_overall_accuracy"))),
+        ("Top Win", _pct(dataset.get("avg_top_win_strike_rate"))),
+        ("Each Way", _pct(dataset.get("avg_each_way_strike_rate"))),
+        ("Roughie E/W", _pct(dataset.get("avg_roughie_strike_rate"))),
+        ("Double", _pct(dataset.get("avg_double_strike_rate"))),
+        ("Quadrella", _pct(dataset.get("avg_quaddie_strike_rate"))),
+        ("Trifecta", _pct(dataset.get("avg_trifecta_strike_rate")) if dataset.get("avg_trifecta_strike_rate") is not None else "Pending"),
+    ]
+    def panel(title: str, items: List[Any], css: str) -> str:
+        cards = "".join(
+            f'<div class="audit-card {css}"><div class="audit-label">{escape(str(label))}</div>'
+            f'<div class="audit-value">{escape(str(value if value is not None else ""))}</div></div>'
+            for label, value in items
+        )
+        return f'<div class="audit-panel"><h3>{escape(title)}</h3><div class="audit-grid">{cards}</div></div>'
+    return '<div class="audit-wrap">' + panel("Dataset Coverage", coverage, "coverage") + panel("Prediction Performance", performance, "performance") + '</div>'
+
+
+def _html_selection_depth(summary: Dict[str, Any]) -> str:
+    depths = [
+        ("Top 1", summary.get("top1_hit_rate"), None, "depth1"),
+        ("Top 2", summary.get("top2_hit_rate"), None, "depth2"),
+        ("Top 3", summary.get("top3_hit_rate"), None, "depth3"),
+        ("Top 4", summary.get("top4_hit_rate"), summary.get("top4_incremental_gain_vs_top3"), "depth4"),
+        ("Top 5", summary.get("top5_hit_rate"), summary.get("top5_incremental_gain_vs_top4"), "depth5"),
+    ]
+    rows = []
+    previous = None
+    for label, coverage, explicit_gain, css in depths:
+        coverage_f = _to_float(coverage) if coverage is not None else None
+        if explicit_gain is not None:
+            gain = _to_float(explicit_gain)
+        elif previous is None or coverage_f is None:
+            gain = None
+        else:
+            gain = round(coverage_f - previous, 2)
+        gain_text = "—" if gain is None else f"+{gain:.2f}%"
+        cov_text = "Pending" if coverage_f is None else f"{coverage_f:.2f}%"
+        emphasis = " <strong>Retail focus</strong>" if label == "Top 3" else ""
+        rows.append(
+            f'<tr class="{css}"><td><strong>{label}</strong>{emphasis}</td>'
+            f'<td class="num"><strong>{cov_text}</strong></td><td class="num">{gain_text}</td></tr>'
+        )
+        if coverage_f is not None:
+            previous = coverage_f
+    return (
+        '<table class="depth-table"><thead><tr><th>Selection Depth</th><th>Winner Coverage</th>'
+        '<th>Incremental Gain</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+        f'<div class="depth-note"><strong>Top 3 vs Top 5:</strong> '
+        f'{_pct(summary.get("top5_incremental_gain_vs_top3"))} additional winner coverage is gained by expanding from three to five selections. '
+        f'Ranks 4-5 contributed {escape(str(summary.get("ranks4_5_incremental_winners") or 0))} additional winners in the analysed dataset.</div>'
+    )
 
 
 def _analysis_metric_rows(payload: Any, prefix: str = "", depth: int = 0) -> List[List[Any]]:
@@ -2092,7 +2154,7 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
         "production_weight": 10.0,
         "tested_range": f"{min(tested_weights):g}% to {max(tested_weights):g}%" if tested_weights else "Not available",
         "leading_candidate_weight": leading.get("new_weight"),
-        "recommended_calibration_range": "Active at 10%; continue monitoring new v2.22.1 results",
+        "recommended_calibration_range": f"Active at 10%; continue monitoring new v{REPORT_VERSION} results",
         "production_status": "Active at 10% in the current production weight set; continue live out-of-sample monitoring.",
         "automatic_weight_changes_enabled": False,
         "simulations": speed_simulations,
@@ -2151,25 +2213,13 @@ def generate_learning_report_html() -> str:
         return f'<div class="card"><div class="label">{escape(label)}</div><div class="value">{escape(str(value))}</div></div>'
     html = [
         '<!doctype html><html><head><meta charset="utf-8"><title>RRT Predictor Learning Report</title>',
-        '<style>body{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#1f2933}h1,h2{color:#0f2f57}h2{border-bottom:2px solid #0f2f57;padding-bottom:6px;margin-top:30px}.subtitle{color:#52606d}.badge{display:inline-block;padding:8px 14px;border-radius:6px;background:#e3fcec;color:#014d40;font-weight:bold;margin-right:8px}.warning{background:#fffbea;color:#8d2b0b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}.card{border:1px solid #d9e2ec;border-radius:8px;padding:14px;background:#f8fafc}.label{color:#627d98;font-size:12px;text-transform:uppercase}.value{font-size:22px;font-weight:bold;color:#102a43}table{width:100%;border-collapse:collapse;margin:14px 0 22px 0;font-size:13px}th{background:#0f2f57;color:white;text-align:left;padding:8px}td{border:1px solid #d9e2ec;padding:8px;vertical-align:top}tr:nth-child(even){background:#f8fafc}.note{background:#f0f4f8;border-left:5px solid #0f2f57;padding:12px 14px;margin-top:20px}.footer{margin-top:40px;font-size:12px;color:#627d98;border-top:1px solid #d9e2ec;padding-top:12px}@media print{.no-print{display:none}table{page-break-inside:avoid}}</style></head><body>',
+        '<style>body{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#1f2933}h1,h2{color:#0f2f57}h2{border-bottom:2px solid #0f2f57;padding-bottom:6px;margin-top:30px}.subtitle{color:#52606d}.badge{display:inline-block;padding:8px 14px;border-radius:6px;background:#e3fcec;color:#014d40;font-weight:bold;margin-right:8px}.warning{background:#fffbea;color:#8d2b0b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}.card{border:1px solid #d9e2ec;border-radius:8px;padding:14px;background:#f8fafc}.label{color:#627d98;font-size:12px;text-transform:uppercase}.value{font-size:22px;font-weight:bold;color:#102a43}table{width:100%;border-collapse:collapse;margin:14px 0 22px 0;font-size:13px}th{background:#0f2f57;color:white;text-align:left;padding:8px}td{border:1px solid #d9e2ec;padding:8px;vertical-align:top}tr:nth-child(even){background:#f8fafc}.note{background:#f0f4f8;border-left:5px solid #0f2f57;padding:12px 14px;margin-top:20px}.audit-wrap{display:grid;grid-template-columns:1fr 2fr;gap:14px;margin:14px 0 20px}.audit-panel{border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc}.audit-panel h3{margin:0 0 10px;color:#0f2f57}.audit-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.audit-panel:nth-child(2) .audit-grid{grid-template-columns:repeat(4,1fr)}.audit-card{border-radius:6px;padding:10px;border:1px solid #cbd5e1}.audit-card.coverage{background:#eaf2ff}.audit-card.performance{background:#edf9f0}.audit-label{font-size:11px;color:#52606d;text-transform:uppercase}.audit-value{font-size:19px;font-weight:bold;color:#102a43;margin-top:3px}.depth-table td.num{text-align:right}.depth-table tr.depth1{background:#f4f6f8}.depth-table tr.depth2{background:#edf4fb}.depth-table tr.depth3{background:#dff3e4}.depth-table tr.depth4{background:#fff4d6}.depth-table tr.depth5{background:#fde8e8}.depth-note{background:#eef6ff;border-left:5px solid #2474b5;padding:11px 13px;margin:-8px 0 20px}.footer{margin-top:40px;font-size:12px;color:#627d98;border-top:1px solid #d9e2ec;padding-top:12px}@media(max-width:900px){.audit-wrap{grid-template-columns:1fr}.audit-panel:nth-child(2) .audit-grid{grid-template-columns:repeat(2,1fr)}}@media print{.no-print{display:none}table{page-break-inside:avoid}.audit-wrap{grid-template-columns:1fr 2fr}}</style></head><body>',
         '<div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>',
         f'<h1>RRT Predictor Learning Report</h1><p class="subtitle">Version {LEARNING_VERSION} | Generated {escape(report.get("generated_at") or "")}</p>',
         f'<span class="badge">{ready}</span><span class="badge">Confidence: {escape(str(status.get("confidence")))}</span><span class="badge warning">Adaptive Control: {escape(str(report.get("promotion_mode") or "unknown").upper())} | Automatic Weight Changes: {"ENABLED" if report.get("automatic_weight_changes_enabled") else "DISABLED"}</span>',
         '<h2>Dataset Audit</h2>',
-        _html_table(['Dataset Coverage','Value'], [
-            ['Meetings', dataset.get('meeting_count')], ['Races', dataset.get('race_count')],
-            ['Unique Tracks', dataset.get('unique_tracks')], ['Unique Dates', dataset.get('unique_dates')]
-        ]),
-        _html_table(['Performance Metric','Rate'], [
-            ['Overall Accuracy', _pct(dataset.get('avg_overall_accuracy'))],
-            ['Top Win', _pct(dataset.get('avg_top_win_strike_rate'))],
-            ['Each Way', _pct(dataset.get('avg_each_way_strike_rate'))],
-            ['Roughie E/Way', _pct(dataset.get('avg_roughie_strike_rate'))],
-            ['Double', _pct(dataset.get('avg_double_strike_rate'))],
-            ['Quadrella', _pct(dataset.get('avg_quaddie_strike_rate'))],
-            ['Trifecta', _pct(dataset.get('avg_trifecta_strike_rate')) if dataset.get('avg_trifecta_strike_rate') is not None else 'Pending history'],
-            ['RRT v Race Data AI', _pct(dataset.get('avg_rrt_vs_pf_ai_gap'))]
-        ]),
+        _html_audit_panels(dataset),
+        '<div class="note"><strong>Selection-depth comparison:</strong> Top 3 / Top 4 / Top 5 winner coverage is shown in the Selection Intelligence section below. Dataset Audit remains focused on compact production and dataset health metrics.</div>',
         '<div class="note"><strong>Trifecta:</strong> v2.22.2 stores the selected five-runner box result. A hit requires all official first three finishers to be contained in the box.</div>',
         f'<div class="note"><strong>Learning Recommendation:</strong> {escape(str(status.get("recommendation")))}</div>',
         '<h2>Current Model Performance</h2>',
@@ -2196,7 +2246,7 @@ def generate_learning_report_html() -> str:
         '<h3>Top 20 Trainer Strike Rate — Last 100</h3>', (_html_table(['Rank','Trainer','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_trainers') or {}).get('profiles') or [])]) if ((report.get('historical_trainers') or {}).get('profiles') or []) else '<div class="note">No trainer strike-rate profiles cached yet.</div>'),
         '<h3>Top 20 Jockey Strike Rate — Last 100</h3>', (_html_table(['Rank','Jockey','Starts','Wins','Places','Win %','Place %','P/L'], [[i.get('rank'),i.get('entity_name'),i.get('starts'),i.get('wins'),i.get('places'),_pct(i.get('win_pct')),_pct(i.get('place_pct')),i.get('last100_pl')] for i in ((report.get('historical_jockeys') or {}).get('profiles') or [])]) if ((report.get('historical_jockeys') or {}).get('profiles') or []) else '<div class="note">No jockey strike-rate profiles cached yet.</div>'),
         '<h2>Evidence-Based Factor Analysis</h2>',
-        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.1 Promotion Controller when its configured gates and operating mode authorise promotion.</div>',
+        '<div class="note">This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the current Promotion Controller when its configured gates and operating mode authorise promotion.</div>',
         '<h3>Factor Effectiveness Ranking</h3>',
         _html_table(['Rank','Factor','Winner Gap','Place Gap','Win Corr','Place Corr','Signal','Confidence','Recommendation'], [[i.get('predictive_rank'),i.get('label'),i.get('winner_gap'),i.get('place_gap'),i.get('win_correlation'),i.get('place_correlation'),i.get('signal_strength'),i.get('confidence'),(i.get('recommendation') or {}).get('direction')] for i in ((report.get('factor_effectiveness') or {}).get('factors') or [])[:13]]),
         '<h3>Future Adaptive Weight Proposals</h3>',
@@ -2228,16 +2278,7 @@ def generate_learning_report_html() -> str:
         _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
         '<h2>Selection Intelligence</h2>',
         '<div class="note">Selection Intelligence v2.22.2 analyses completed native full-field races across Top 1 to Top 5 selection depth, Top 3 versus Top 5 incremental coverage, boundary misses, value/roughie winners, false positives and factor gaps. Its evidence remains analysis-only and feeds the controlled promotion gate.</div>',
-        _html_table(['Selection Depth','Winner Coverage'], [
-            ['Top 1', _pct(selection_summary.get('top1_hit_rate'))],
-            ['Top 2', _pct(selection_summary.get('top2_hit_rate'))],
-            ['Top 3', _pct(selection_summary.get('top3_hit_rate'))],
-            ['Top 4', _pct(selection_summary.get('top4_hit_rate'))],
-            ['Top 5', _pct(selection_summary.get('top5_hit_rate'))],
-            ['Top 4 Gain vs Top 3', _pct(selection_summary.get('top4_incremental_gain_vs_top3'))],
-            ['Top 5 Gain vs Top 3', _pct(selection_summary.get('top5_incremental_gain_vs_top3'))],
-            ['Winners Added by Ranks 4-5', selection_summary.get('ranks4_5_incremental_winners')],
-        ]),
+        _html_selection_depth(selection_summary),
         _html_table(['Metric','Value'], [
             ['Near Miss Rate', selection_summary.get('near_miss_rate')],
             ['Boundary Miss Rate', selection_summary.get('boundary_miss_rate')],
@@ -2323,7 +2364,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
         ["Database schema",DATABASE_SCHEMA_VERSION],
         ["Prediction model",MODEL_VERSION]
     ], [7*cm,9*cm]))
-    story.append(Paragraph("Trifecta v2.22.1 result history is stored at meeting level. A hit requires all official first three finishers to be contained in the selected five-runner box.", styles["BodyText"]))
+    story.append(Paragraph("Trifecta v2.22.2 result history is stored at meeting level. A hit requires all official first three finishers to be contained in the selected five-runner box.", styles["BodyText"]))
     story.append(Paragraph("Learning Recommendation", styles["RRTHeading"])); story.append(Paragraph(escape(str(status.get("recommendation"))), styles["BodyText"]))
     story.append(Paragraph("Current Model Performance", styles["RRTHeading"]))
     story.append(t(["Metric","Value"], [["Overall Accuracy",_pct(dataset.get('avg_overall_accuracy'))],["Top Win",_pct(dataset.get('avg_top_win_strike_rate'))],["Each Way",_pct(dataset.get('avg_each_way_strike_rate'))],["Roughie E/Way",_pct(dataset.get('avg_roughie_strike_rate'))],["Double",_pct(dataset.get('avg_double_strike_rate'))],["Quadrella",_pct(dataset.get('avg_quaddie_strike_rate'))],["Race Data AI Top Win",_pct(dataset.get('avg_pf_ai_top_win_strike_rate'))],["RRT Advantage",_pct(dataset.get('avg_rrt_vs_pf_ai_gap'))],["RRT / Race Data AI / Ties",f"{h2h.get('rrt_wins')} / {h2h.get('pf_ai_wins')} / {h2h.get('ties')}"]], [7*cm,9*cm]))
@@ -2370,7 +2411,7 @@ def generate_learning_report_pdf_bytes() -> bytes:
         story.append(Paragraph("Top 20 Jockey Strike Rate — Last 100", styles["RRTHeading"]))
         story.append(t(["Rank","Jockey","Starts","Wins","Places","Win %","Place %"], [[i.get("rank"),i.get("entity_name"),i.get("starts"),i.get("wins"),i.get("places"),_pct(i.get("win_pct")),_pct(i.get("place_pct"))] for i in (report.get("historical_jockeys") or {}).get("profiles")]))
     story.append(Paragraph("Evidence-Based Factor Analysis", styles["RRTHeading"]))
-    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the v2.22.1 Promotion Controller when its configured gates and operating mode authorise promotion.", styles["BodyText"]))
+    story.append(Paragraph("This section compares completed runner factor scores against actual results. It reports against the active PostgreSQL production weight set. Proposed changes do not alter production directly; they are evaluated and may be applied only through the current Promotion Controller when its configured gates and operating mode authorise promotion.", styles["BodyText"]))
     factor_effectiveness = report.get("factor_effectiveness") or {}
     weight_recommendations = report.get("weight_recommendations") or {}
     model_health = report.get("model_health") or {}

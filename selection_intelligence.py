@@ -94,6 +94,10 @@ def _group_by_race(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]
 
 
 def _rank_race(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Sort the existing row dictionaries in-place and attach the rank.
+    # Avoid cloning every runner row; the full-field dataset is large enough
+    # that repeated dictionary copies can push a 512 MB Render instance over
+    # its memory ceiling during a full historical analysis.
     ranked = sorted(
         rows,
         key=lambda item: (
@@ -103,7 +107,9 @@ def _rank_race(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         ),
         reverse=True,
     )
-    return [{**row, "rrt_rank": index + 1} for index, row in enumerate(ranked)]
+    for index, row in enumerate(ranked, start=1):
+        row["rrt_rank"] = index
+    return ranked
 
 
 def _factor_gap_summary(winner: Dict[str, Any], top4: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -221,7 +227,11 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "roughie_candidate_winner": roughie_candidate_winner,
         "roughie_like_winner": roughie_like_winner,
         "score_gap_to_top4_floor": round(_to_float(winner.get("final_score")) - top4_score_floor, 2),
-        "top4": [
+        # Detailed runner lists and factor gaps are retained only for Top-4
+        # misses, because only those races are used by the miss analysis and
+        # Top Misses report. This materially reduces peak memory while
+        # preserving all existing analytical outputs.
+        "top4": ([
             {
                 "runner": item.get("runner_name"),
                 "tab_number": item.get("tab_number"),
@@ -232,8 +242,8 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "actual_position": item.get("actual_position"),
             }
             for item in top4
-        ],
-        "top5": [
+        ] if not top4_hit else []),
+        "top5": ([
             {
                 "runner": item.get("runner_name"),
                 "tab_number": item.get("tab_number"),
@@ -244,9 +254,9 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "actual_position": item.get("actual_position"),
             }
             for item in top5
-        ],
+        ] if not top4_hit else []),
         "false_positive_count": len(false_positives),
-        "false_positives": [
+        "false_positives": ([
             {
                 "runner": item.get("runner_name"),
                 "rrt_rank": item.get("rrt_rank"),
@@ -255,9 +265,9 @@ def _analyse_race(race_key: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "actual_position": item.get("actual_position"),
             }
             for item in false_positives
-        ],
-        "factor_gaps": _factor_gap_summary(winner, top4),
-        "miss_reasons": [] if top4_hit else _miss_reason(winner, top4),
+        ] if not top4_hit else []),
+        "factor_gaps": (_factor_gap_summary(winner, top4) if not top4_hit else []),
+        "miss_reasons": ([] if top4_hit else _miss_reason(winner, top4)),
     }
 
 
