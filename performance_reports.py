@@ -1034,7 +1034,7 @@ def _learning_strengths(base: Dict[str, Any], tracks: Dict[str, Any], dates: Dic
     }]
     if _to_float(summary.get("avg_rrt_vs_pf_ai_gap")) > 0:
         rows.append({
-            "area": "RRT vs Race Data AI",
+            "area": "RRT Predictor vs Race Data AI",
             "metric_value": summary.get("avg_rrt_vs_pf_ai_gap"),
             "priority": "Maintain",
             "evidence": f"RRT is ahead of Race Data AI by {_pct(summary.get('avg_rrt_vs_pf_ai_gap'))}, with {h2h.get('rrt_wins')} RRT wins versus {h2h.get('pf_ai_wins')} Race Data AI wins.",
@@ -2051,6 +2051,7 @@ def _html_audit_panels(dataset: Dict[str, Any]) -> str:
         ("Double", _pct(dataset.get("avg_double_strike_rate"))),
         ("Quadrella", _pct(dataset.get("avg_quaddie_strike_rate"))),
         ("Trifecta", _pct(dataset.get("avg_trifecta_strike_rate")) if dataset.get("avg_trifecta_strike_rate") is not None else "Pending"),
+        ("RRT Predictor vs Race Data AI", _pct(dataset.get("avg_rrt_vs_pf_ai_gap"))),
     ]
     def panel(title: str, items: List[Any], css: str) -> str:
         cards = "".join(
