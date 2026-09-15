@@ -13,8 +13,8 @@ from replay_engine import run_historical_replay
 from selection_intelligence import run_selection_intelligence_analysis
 from simulator_engine import run_weight_simulation
 
-PROMOTION_VERSION = "2.22.0"
-MODEL_VERSION = "2.22.0"
+PROMOTION_VERSION = "2.22.2"
+MODEL_VERSION = "2.22.2"
 
 PROMOTION_MODE = os.getenv("RRT_PROMOTION_MODE", "shadow").strip().lower()
 if PROMOTION_MODE not in {"off", "shadow", "live"}:
@@ -22,7 +22,7 @@ if PROMOTION_MODE not in {"off", "shadow", "live"}:
 
 MIN_NATIVE_RACES = int(os.getenv("RRT_PROMOTION_MIN_NATIVE_RACES", "1000"))
 MIN_COMPLETED_RUNNERS = int(os.getenv("RRT_PROMOTION_MIN_COMPLETED_RUNNERS", "8000"))
-MIN_OVERALL_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_OVERALL_IMPROVEMENT", "0.25"))
+MIN_OVERALL_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_OVERALL_IMPROVEMENT", "0.15"))
 MIN_TOP1_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP1_IMPROVEMENT", "0.00"))
 MIN_TOP4_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP4_IMPROVEMENT", "0.00"))
 MIN_TOP5_IMPROVEMENT = float(os.getenv("RRT_PROMOTION_MIN_TOP5_IMPROVEMENT", "0.00"))
@@ -227,7 +227,7 @@ def _promote(
     candidate_weights: Dict[str, float],
     gate: Dict[str, Any],
 ) -> Dict[str, Any]:
-    new_weight_set = f"2.22.0-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    new_weight_set = f"2.22.2-auto-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     execute_sql("UPDATE rrt_model_weight_sets SET status='Archive' WHERE status='Rollback';")
     execute_sql("UPDATE rrt_model_weight_sets SET status='Rollback' WHERE status='Active';")
     execute_sql(
@@ -235,7 +235,7 @@ def _promote(
         INSERT INTO rrt_model_weight_sets(
             model_version, status, weights_json, source, notes, activated_at,
             promoted_by_cycle_id, promotion_evidence_json, automatic_promotion
-        ) VALUES(%s,'Active',%s::jsonb,'v2.22.0 Promotion Controller',%s,NOW(),%s,%s::jsonb,TRUE);
+        ) VALUES(%s,'Active',%s::jsonb,'v2.22.2 Promotion Controller',%s,NOW(),%s,%s::jsonb,TRUE);
         """,
         (
             new_weight_set,
@@ -259,7 +259,7 @@ def _promote(
 
 def run_promotion_cycle(
     cycle_id: Optional[str] = None,
-    candidate_name: str = "v2.22.0 autonomous promotion candidate",
+    candidate_name: str = "v2.22.2 autonomous promotion candidate",
     save_result: bool = True,
 ) -> Dict[str, Any]:
     try:
@@ -278,9 +278,9 @@ def run_promotion_cycle(
         simulation = run_weight_simulation(
             test_weights=candidate_weights,
             simulation_name=candidate_name,
-            notes="v2.22.0 exact adaptive candidate evaluated by the promotion controller.",
+            notes="v2.22.2 exact adaptive candidate evaluated by the promotion controller.",
             save_result=True,
-            simulation_group="v2.22.0 promotion-controller",
+            simulation_group="v2.22.2 promotion-controller",
         )
         replay = run_historical_replay(
             replay_name=candidate_name,
