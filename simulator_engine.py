@@ -5,8 +5,8 @@ import uuid
 from database import fetch_all, fetch_one, execute_sql
 
 
-SIMULATOR_VERSION = "2.21.0"
-MODEL_VERSION = "2.21.0"
+SIMULATOR_VERSION = "2.22.2"
+MODEL_VERSION = "2.22.2"
 
 
 CURRENT_MODEL_WEIGHTS = {
@@ -178,7 +178,7 @@ def _load_completed_runner_rows(min_meeting_date: Optional[str]=None, max_meetin
         "actual_position IS NOT NULL",
         "race_number IS NOT NULL",
         "meeting_id IS NOT NULL",
-        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0')",
+        "model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0','2.22.1','2.22.2')",
     ]
     params: List[Any] = []
     if min_meeting_date:
@@ -499,7 +499,7 @@ def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulatio
         rows = _preloaded_rows if _preloaded_rows is not None else _load_completed_runner_rows(min_meeting_date, max_meeting_date)
         grouped = _preloaded_grouped if _preloaded_grouped is not None else _group_by_race(rows)
         current_weights = _normalise_weights(_active_weights())
-        proposed_weights = _normalise_weights(test_weights or CURRENT_MODEL_WEIGHTS)
+        proposed_weights = _normalise_weights(test_weights or current_weights)
         current_result = _evaluate_grouped_races(grouped, current_weights, 0.0, 0, 0.0)
         simulated_result = _evaluate_grouped_races(grouped, proposed_weights, 0.0, 0, 0.0)
         cm = current_result.get("metrics") or {}
@@ -579,7 +579,8 @@ def get_simulation_history(limit: int=20) -> Dict[str, Any]:
     try:
         rows = fetch_all("""
             SELECT simulation_id, simulation_name, simulator_version, model_version, dataset_runner_count, dataset_race_count,
-                   current_metrics_json, simulated_metrics_json, improvement_json, recommendation_json, notes, created_at
+                   current_metrics_json, simulated_metrics_json, improvement_json, recommendation_json, notes,
+                   simulation_group, factor_tested, old_weight, new_weight, change_amount, created_at
             FROM rrt_weight_simulations ORDER BY created_at DESC LIMIT %s;
         """, (limit,))
         return {"success": True, "provider": "PostgreSQL", "simulator_version": SIMULATOR_VERSION, "report": "simulation_history", "limit": limit, "simulation_count": len(rows), "simulations": rows}
@@ -617,27 +618,29 @@ def run_default_simulation_suite(
         results: List[Dict[str, Any]] = []
         rows = _load_completed_runner_rows(min_meeting_date, max_meeting_date)
         grouped = _group_by_race(rows)
+        active_weights = _normalise_weights(_active_weights())
 
         for test in DEFAULT_SINGLE_FACTOR_SUITE:
             factor = test.get("factor")
             change = _to_float(test.get("change"))
-            old_weight = _to_float(CURRENT_MODEL_WEIGHTS.get(factor))
+            old_weight = _to_float(active_weights.get(factor))
             new_weight = max(0.0, old_weight + change)
 
-            test_weights = {factor: new_weight}
+            test_weights = dict(active_weights)
+            test_weights[factor] = new_weight
             label = test.get("label") or f"{factor} {change:+.0f}"
 
             result = run_weight_simulation(
                 test_weights=test_weights,
                 simulation_name=str(label),
-                notes="v2.21.0 aligned Top 20 Value Index suite",
+                notes="v2.22.2 active-baseline Top 20 Value Index suite",
                 min_meeting_date=min_meeting_date,
                 max_meeting_date=max_meeting_date,
                 roughie_min_price=roughie_min_price,
                 roughie_min_market_rank=roughie_min_market_rank,
                 roughie_min_score=roughie_min_score,
                 save_result=True,
-                simulation_group="v2.21.0 aligned Top 20 Value Index suite",
+                simulation_group="v2.22.2 active-baseline Top 20 Value Index suite",
                 factor_tested=factor,
                 old_weight=old_weight,
                 new_weight=new_weight,
@@ -734,13 +737,14 @@ def run_production_calibration(
 
 
 def get_active_weight_summary() -> Dict[str, Any]:
+    active_weights = _active_weights()
     return {
         "success": True,
         "simulator_version": SIMULATOR_VERSION,
         "model_version": MODEL_VERSION,
-        "active_weights": _active_weights(),
+        "active_weights": active_weights,
         "rollback_weights": ROLLBACK_MODEL_WEIGHTS,
-        "active_weight_total": round(sum(CURRENT_MODEL_WEIGHTS.values()), 2),
+        "active_weight_total": round(sum(active_weights.values()), 2),
         "rollback_weight_total": round(sum(ROLLBACK_MODEL_WEIGHTS.values()), 2),
         "automatic_weight_changes_enabled": False,
     }
@@ -763,7 +767,7 @@ def get_simulation_report(simulation_id: Optional[str]=None) -> Dict[str, Any]:
 
 
 def run_no_market_comparison(min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None) -> Dict[str, Any]:
-    """v2.22.1 analysis-only comparison: remove Market and normalise remaining active weights."""
+    """v2.22.2 analysis-only comparison: remove Market and normalise remaining active weights."""
     active = _active_weights()
     no_market = dict(active)
     no_market["market"] = 0.0
@@ -773,13 +777,13 @@ def run_no_market_comparison(min_meeting_date: Optional[str]=None, max_meeting_d
     normalised = {k: round((max(0.0,_to_float(v))/remaining)*100.0,6) for k,v in no_market.items()}
     result = run_weight_simulation(
         test_weights=normalised,
-        simulation_name="v2.22.1 No-Market historical comparison",
+        simulation_name="v2.22.2 No-Market historical comparison",
         notes="Analysis only: Market removed; all remaining active production weights proportionally normalised. Production is unchanged.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
         save_result=True,
-        simulation_group="v2.22.1 no-market-analysis",
+        simulation_group="v2.22.2 no-market-analysis",
     )
     if isinstance(result, dict):
-        result.update({"analysis_version":"2.22.1","analysis":"no_market_comparison","analysis_only":True,"market_removed":True,"production_weights_changed":False,"normalised_no_market_weights":normalised,"saved_for_reporting":True})
+        result.update({"analysis_version":"2.22.2","analysis":"no_market_comparison","analysis_only":True,"market_removed":True,"production_weights_changed":False,"normalised_no_market_weights":normalised,"saved_for_reporting":True})
     return result

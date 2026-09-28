@@ -1556,7 +1556,7 @@ def _learning_no_market_summary() -> Dict[str, Any]:
             """
             SELECT simulation_json, created_at
             FROM rrt_weight_simulations
-            WHERE simulation_group = 'v2.22.1 no-market-analysis'
+            WHERE simulation_group IN ('v2.22.2 no-market-analysis','v2.22.1 no-market-analysis')
             ORDER BY created_at DESC
             LIMIT 1;
             """
@@ -1583,6 +1583,43 @@ def _learning_no_market_summary() -> Dict[str, Any]:
         if isinstance(payload, str):
             import json
             payload = json.loads(payload)
+
+        active_row = fetch_one(
+            """
+            SELECT weights_json
+            FROM rrt_model_weight_sets
+            WHERE status = 'Active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1;
+            """
+        ) or {}
+        active_weights = active_row.get("weights_json") or {}
+        saved_current_weights = payload.get("current_weights") or {}
+        if isinstance(active_weights, dict) and active_weights and isinstance(saved_current_weights, dict):
+            keys = set(active_weights) | set(saved_current_weights)
+            weights_match = all(
+                abs(_to_float(active_weights.get(key)) - _to_float(saved_current_weights.get(key))) < 0.005
+                for key in keys
+            )
+            if not weights_match:
+                return {
+                    "success": True,
+                    "analysis_version": REPORT_VERSION,
+                    "analysis": "no_market_comparison",
+                    "analysis_only": True,
+                    "production_model_changed": False,
+                    "report_execution": "saved_comparison_stale",
+                    "endpoint": "/api/simulator/no-market-comparison",
+                    "saved_result_available": False,
+                    "refresh_required": True,
+                    "active_weights": active_weights,
+                    "saved_at": row.get("created_at"),
+                    "note": (
+                        "The saved No-Market comparison predates the current active production weight set. "
+                        "Run /api/simulator/no-market-comparison once to refresh the analysis against the live weights. "
+                        "The Learning Report will not display stale No-Market metrics as current evidence."
+                    ),
+                }
 
         current_model = payload.get("current_model") or {}
         no_market_model = payload.get("simulated_model") or {}
@@ -2116,6 +2153,11 @@ def _analysis_metric_rows(payload: Any, prefix: str = "", depth: int = 0) -> Lis
 
 
 def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simulations: Dict[str, Any]) -> Dict[str, Any]:
+    active_row = fetch_one(
+        "SELECT weights_json FROM rrt_model_weight_sets WHERE status='Active' ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1;"
+    ) or {}
+    active_weights = active_row.get("weights_json") or {}
+    current_speed_weight = _to_float(active_weights.get("speed"), 10.0)
     speed_factor = next((row for row in (factor_effectiveness.get("factors") or []) if str(row.get("factor") or "").strip().lower() == "speed"), {})
     speed_simulations = []
     for row in best_simulations.get("simulations") or []:
@@ -2152,32 +2194,23 @@ def _extract_speed_calibration(factor_effectiveness: Dict[str, Any], best_simula
         "combined_predictive_score": speed_factor.get("combined_predictive_score"),
         "signal_strength": speed_factor.get("signal_strength"),
         "confidence": speed_factor.get("confidence"),
-        "production_weight": 10.0,
+        "production_weight": current_speed_weight,
         "tested_range": f"{min(tested_weights):g}% to {max(tested_weights):g}%" if tested_weights else "Not available",
         "leading_candidate_weight": leading.get("new_weight"),
-        "recommended_calibration_range": f"Active at 10%; continue monitoring new v{REPORT_VERSION} results",
-        "production_status": "Active at 10% in the current production weight set; continue live out-of-sample monitoring.",
-        "automatic_weight_changes_enabled": False,
+        "recommended_calibration_range": f"Active at {current_speed_weight:g}%; eligible for evidence-based adaptive review under the Promotion Controller",
+        "production_status": f"Active at {current_speed_weight:g}% in the current production weight set; adaptive changes remain safety-gated by the Promotion Controller.",
+        "automatic_weight_changes_enabled": True,
         "simulations": speed_simulations,
     }
 
 def _apply_speed_report_override(weight_recommendations: Dict[str, Any], speed_calibration: Dict[str, Any]) -> Dict[str, Any]:
-    recommendations = list(weight_recommendations.get("recommendations") or [])
-    updated = []
-    for row in recommendations:
-        item = dict(row)
-        factor_key = str(item.get("factor") or item.get("label") or "").strip().lower()
-        if factor_key in {"speed", "normalised speed rating", "normalized speed rating"}:
-            item.update({
-                "current_weight": 10.0,
-                "recommended_weight": "Hold at 10%",
-                "change": "0",
-                "direction": "Production Monitoring",
-                "priority": "High",
-                "reason": f"Ranked #{speed_calibration.get('predictive_rank')} with a {speed_calibration.get('signal_strength')} signal and High confidence. The historically leading 10% simulator candidate is active in the current production weight set; hold and monitor new out-of-sample results.",
-            })
-        updated.append(item)
-    return {**weight_recommendations, "recommendations": updated, "analysis_only": True, "prediction_model_changed": False, "automatic_weight_changes_enabled": False}
+    """Keep Speed inside the same evidence-based recommendation framework as all other active factors."""
+    return {
+        **weight_recommendations,
+        "analysis_only": True,
+        "prediction_model_changed": False,
+        "speed_adaptive_eligible": True,
+    }
 
 
 def get_speed_rating_report() -> Dict[str, Any]:
@@ -2286,9 +2319,9 @@ def generate_learning_report_html() -> str:
         ) if (report.get('no_market_comparison') or {}).get('saved_result_available') else '',
         '<h2>Historical Weight Simulation</h2>',
         '<div class="note">Historical simulations compare alternative weights and roughie rules against stored completed runner data without changing production weights.</div>',
-        _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('best_simulations') or {}).get('simulations') or [])[:10]]),
+        _html_table(['Simulation','Factor','Old','New','Change','Runners','Races','Overall +/-','Top Win +/-','Each Way +/-','Roughie +/-','Status'], [[i.get('simulation_name'),i.get('factor_tested'),i.get('old_weight'),i.get('new_weight'),i.get('change_amount'),i.get('dataset_runner_count'),i.get('dataset_race_count'),(i.get('improvement_json') or {}).get('overall_accuracy') or i.get('overall_improvement'),(i.get('improvement_json') or {}).get('top_win_strike_rate') or i.get('top_win_improvement'),(i.get('improvement_json') or {}).get('each_way_strike_rate') or i.get('each_way_improvement'),(i.get('improvement_json') or {}).get('roughie_strike_rate') or i.get('roughie_improvement'),(i.get('recommendation_json') or {}).get('status')] for i in ((report.get('simulation_history') or {}).get('simulations') or [])[:10]]),
         '<h2>Normalised Speed Rating</h2>',
-        '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight remains active at 10% in the current production weight set while live monitoring continues.</p>',
+        '<p>Official race time, distance and beaten margin are used to create a rolling pre-race Speed Rating. Sectionals and in-run positions are not used. Corrected factor-analysis, simulator and selection-intelligence evidence is now available; production weight is read from the active PostgreSQL weight set and remains eligible for evidence-based adaptive review through the Promotion Controller.</p>',
         _html_table(['Metric','Value'], [
             ['Predictive Rank', f"#{(report.get('speed_calibration') or {}).get('predictive_rank')}"],
             ['Signal / Confidence', f"{(report.get('speed_calibration') or {}).get('signal_strength')} / {(report.get('speed_calibration') or {}).get('confidence')}"],
@@ -2296,7 +2329,7 @@ def generate_learning_report_html() -> str:
             ['Place Correlation', (report.get('speed_calibration') or {}).get('place_correlation')],
             ['Combined Predictive Score', (report.get('speed_calibration') or {}).get('combined_predictive_score')],
             ['Analysed Runner Rows', (report.get('speed_calibration') or {}).get('runner_count')],
-            ['Current Production Weight', '10%'],
+            ['Current Production Weight', f"{(report.get('speed_calibration') or {}).get('production_weight')}%"],
             ['Simulator Range Tested', (report.get('speed_calibration') or {}).get('tested_range')],
             ['Leading Simulator Candidate', f"{(report.get('speed_calibration') or {}).get('leading_candidate_weight')}%"],
             ['Recommended Calibration Range', (report.get('speed_calibration') or {}).get('recommended_calibration_range')],

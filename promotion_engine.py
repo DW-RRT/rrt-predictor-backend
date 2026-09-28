@@ -95,31 +95,68 @@ def _dataset_summary() -> Dict[str, Any]:
     }
 
 
-def _candidate_weights(weight_report: Dict[str, Any], active_weights: Dict[str, Any]) -> Dict[str, float]:
+def _candidate_weights(
+    weight_report: Dict[str, Any],
+    active_weights: Dict[str, Any],
+    factor_report: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
     candidate = dict(active_weights)
     for recommendation in weight_report.get("recommendations") or []:
         factor = str(recommendation.get("factor") or "").strip()
         if factor and recommendation.get("recommended_weight") is not None:
             candidate[factor] = _float(recommendation.get("recommended_weight"), _float(candidate.get(factor)))
-    candidate.setdefault("speed", _float(active_weights.get("speed"), 0.0))
+
+    # v2.22.2: Speed is an active production factor and is eligible for the same
+    # evidence-based adaptive thresholds as the other factors. This closes the
+    # legacy hold-at-10 path without bypassing Simulator/Replay/promotion gates.
+    speed_row = next(
+        (row for row in ((factor_report or {}).get("factors") or [])
+         if str(row.get("factor") or "").strip().lower() == "speed"),
+        None,
+    )
+    if speed_row:
+        current_speed = _float(active_weights.get("speed"), 0.0)
+        combined = _float(speed_row.get("combined_predictive_score"))
+        winner_gap = _float(speed_row.get("winner_gap"))
+        place_gap = _float(speed_row.get("place_gap"))
+        confidence = str(speed_row.get("confidence") or "")
+        dataset_confidence = str(((factor_report or {}).get("dataset") or {}).get("confidence") or "")
+        recommended_speed = current_speed
+        if dataset_confidence not in {"Low", "Early"} and confidence != "Low":
+            if combined >= 0.18 and winner_gap > 5 and place_gap > 3:
+                recommended_speed = current_speed + 2.0
+            elif combined >= 0.10 and (winner_gap > 3 or place_gap > 2):
+                recommended_speed = current_speed + 1.0
+            elif combined <= -0.08 and winner_gap < 0 and place_gap < 0:
+                recommended_speed = max(0.0, current_speed - 2.0)
+            elif abs(combined) < 0.05:
+                recommended_speed = max(0.0, current_speed - 1.0)
+        candidate["speed"] = recommended_speed
+    else:
+        candidate.setdefault("speed", _float(active_weights.get("speed"), 0.0))
+
     return _normalise(candidate)
 
 
 def _recent_shadow_passes() -> int:
-    row = fetch_one(
+    required_previous = max(0, REQUIRED_SHADOW_PASSES - 1)
+    if required_previous == 0:
+        return 0
+    rows = fetch_all(
         """
-        SELECT COUNT(*) AS count
-        FROM (
-            SELECT decision
-            FROM rrt_weight_promotion_audit
-            WHERE decision IN ('Approved-Shadow', 'Promoted')
-            ORDER BY created_at DESC
-            LIMIT %s
-        ) recent;
+        SELECT decision
+        FROM rrt_weight_promotion_audit
+        ORDER BY created_at DESC
+        LIMIT %s;
         """,
-        (max(0, REQUIRED_SHADOW_PASSES - 1),),
-    ) or {}
-    return _int(row.get("count"))
+        (required_previous,),
+    )
+    consecutive = 0
+    for row in rows:
+        if row.get("decision") not in {"Approved-Shadow", "Promoted"}:
+            break
+        consecutive += 1
+    return consecutive
 
 
 def _gate(dataset: Dict[str, Any], simulation: Dict[str, Any], replay: Dict[str, Any]) -> Dict[str, Any]:
@@ -271,7 +308,7 @@ def run_promotion_cycle(
         factor_report = get_factor_effectiveness_report()
         weight_report = get_weight_recommendations()
         selection_report = run_selection_intelligence_analysis(save_result=True)
-        candidate_weights = _candidate_weights(weight_report, active_weights)
+        candidate_weights = _candidate_weights(weight_report, active_weights, factor_report)
         dataset = _dataset_summary()
         candidate_id = f"candidate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 

@@ -8,8 +8,8 @@ from adaptive_weight_recommendations import get_weight_recommendations
 from simulator_engine import run_weight_simulation
 from selection_intelligence import run_selection_intelligence_analysis
 
-LEARNING_VERSION = "2.22.0"
-MODEL_VERSION = "2.22.0"
+LEARNING_VERSION = "2.22.2"
+MODEL_VERSION = "2.22.2"
 AUTO_PROMOTION_ENABLED = False  # Promotion is controlled by promotion_engine.py; default deployment mode is shadow.
 MIN_NATIVE_RACES = int(os.getenv("RRT_PROMOTION_MIN_NATIVE_RACES", "150"))
 MIN_COMPLETED_RUNNERS = int(os.getenv("RRT_PROMOTION_MIN_COMPLETED_RUNNERS", "1200"))
@@ -44,17 +44,34 @@ def _normalise(weights: Dict[str,Any])->Dict[str,float]:
     if scaled: scaled[max(scaled,key=scaled.get)]=round(scaled[max(scaled,key=scaled.get)]+delta,2)
     return scaled
 
-def _candidate(weight_report: Dict[str,Any])->Dict[str,float]:
+def _candidate(weight_report: Dict[str,Any], factor_report: Optional[Dict[str,Any]]=None)->Dict[str,float]:
     current=dict(weight_report.get("current_model_weights") or {})
     current.setdefault("speed", 0.0)
     for r in weight_report.get("recommendations") or []:
         current[str(r.get("factor"))]=_f(r.get("recommended_weight"),_f(current.get(str(r.get("factor")))))
+
+    speed_row = next((row for row in ((factor_report or {}).get("factors") or []) if str(row.get("factor") or "").strip().lower()=="speed"), None)
+    if speed_row:
+        current_speed=_f(current.get("speed"))
+        combined=_f(speed_row.get("combined_predictive_score"))
+        winner_gap=_f(speed_row.get("winner_gap"))
+        place_gap=_f(speed_row.get("place_gap"))
+        confidence=str(speed_row.get("confidence") or "")
+        dataset_confidence=str(((factor_report or {}).get("dataset") or {}).get("confidence") or "")
+        recommended_speed=current_speed
+        if dataset_confidence not in {"Low","Early"} and confidence!="Low":
+            if combined>=0.18 and winner_gap>5 and place_gap>3: recommended_speed=current_speed+2.0
+            elif combined>=0.10 and (winner_gap>3 or place_gap>2): recommended_speed=current_speed+1.0
+            elif combined<=-0.08 and winner_gap<0 and place_gap<0: recommended_speed=max(0.0,current_speed-2.0)
+            elif abs(combined)<0.05: recommended_speed=max(0.0,current_speed-1.0)
+        current["speed"]=recommended_speed
     return _normalise(current)
+
 
 def _dataset()->Dict[str,Any]:
     row=fetch_one("""SELECT COUNT(*) AS runner_rows, COUNT(*) FILTER (WHERE actual_position IS NOT NULL) AS completed_runner_rows,
         COUNT(DISTINCT meeting_id) AS meeting_count,
-        COUNT(DISTINCT (meeting_id::text||'|'||COALESCE(race_number::text,''))) FILTER (WHERE actual_position IS NOT NULL AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0')) AS native_completed_races,
+        COUNT(DISTINCT (meeting_id::text||'|'||COALESCE(race_number::text,''))) FILTER (WHERE actual_position IS NOT NULL AND model_version IN ('2.18.3','2.18.4','2.19.0','2.19.1','2.19.2','2.19.3','2.19.4','2.19.5a','2.19.5b','2.19.6','2.20.0','2.20.0a','2.20.1','2.21.0','2.22.0','2.22.1','2.22.2')) AS native_completed_races,
         MIN(meeting_date) AS first_meeting_date, MAX(meeting_date) AS latest_meeting_date FROM rrt_runner_factor_snapshots;""") or {}
     return {"source":"historical_factor_analysis_plus_native_capture","runner_rows":_i(row.get("runner_rows")),"completed_runner_rows":_i(row.get("completed_runner_rows")),"meeting_count":_i(row.get("meeting_count")),"native_completed_races":_i(row.get("native_completed_races")),"first_meeting_date":row.get("first_meeting_date"),"latest_meeting_date":row.get("latest_meeting_date"),"historical_learning_retained":True,"native_full_field_capture_active":True}
 
@@ -90,10 +107,10 @@ def _promote(cycle_id:str, current:Dict[str,Any], proposed:Dict[str,float], gate
        (promotion_id,cycle_id,current.get("model_version"),new_id,json.dumps(gate,default=str),json.dumps(current.get("weights_json") or {}),json.dumps(proposed)))
     return {"applied":True,"promotion_id":promotion_id,"from_weight_set":current.get("model_version"),"to_weight_set":new_id,"weights":proposed}
 
-def run_adaptive_learning_cycle(cycle_name:str="v2.22.0 autonomous adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
+def run_adaptive_learning_cycle(cycle_name:str="v2.22.2 autonomous adaptive learning cycle",save_result:bool=True)->Dict[str,Any]:
     """Generate and store the adaptive candidate without directly changing production weights.
 
-    v2.22.0 separates candidate generation from promotion. When autonomous control is
+    v2.22.2 separates candidate generation from promotion. When autonomous control is
     enabled, main.py passes the completed learning cycle to the Promotion Controller,
     which evaluates it through Simulator and Replay. The manual promotion endpoint is
     retained for diagnostics and controlled re-evaluation.
@@ -109,15 +126,15 @@ def run_adaptive_learning_cycle(cycle_name:str="v2.22.0 autonomous adaptive lear
         weights["recommendation_version"] = LEARNING_VERSION
         weights["analysis_only"] = True
         weights["prediction_model_changed"] = False
-        weights["safety_note"] = f"v2.22.0 creates an adaptive candidate only. Promotion is evaluated separately by the Promotion Controller in {PROMOTION_MODE} mode."
+        weights["safety_note"] = f"v2.22.2 creates an adaptive candidate only. Promotion is evaluated separately by the Promotion Controller in {PROMOTION_MODE} mode."
       if not factors.get("success") or not weights.get("success"):
         return {"success":False,"learning_version":LEARNING_VERSION,"factor_report":factors,"weight_report":weights}
       selection=run_selection_intelligence_analysis(save_result=True)
-      proposed=_candidate(weights)
-      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.22.0 adaptive candidate preview",notes="Candidate preview only; final promotion validation also requires Replay.",save_result=True,simulation_group="v2.22.0 adaptive-preview")
+      proposed=_candidate(weights, factors)
+      sim=run_weight_simulation(test_weights=proposed,simulation_name="v2.22.2 adaptive candidate preview",notes="Candidate preview only; final promotion validation also requires Replay.",save_result=True,simulation_group="v2.22.2 adaptive-preview")
       cycle_id=f"learn-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
       current=_active_weight_row()
-      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":True,"weights_changed_by_this_cycle":False,"production_weights_active":True,"automatic_weight_changes_enabled":AUTOMATIC_WEIGHT_CHANGES_ENABLED,"promotion_controller":PROMOTION_MODE,"historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":{"decision":"Pending Promotion Controller","promotion_authorised":False},"promotion":{"applied":False,"reason":"Candidate generation is complete. Autonomous control will pass this cycle to the Promotion Controller; /api/model/run-promotion-cycle remains available for controlled manual re-evaluation."},"safety_note":f"v2.22.0 learning generates candidates only. Promotion is handled separately by promotion_engine.py in {PROMOTION_MODE} mode; production weights change only when the Promotion Controller authorises and applies a candidate."}
+      result={"success":True,"provider":"PostgreSQL","learning_version":LEARNING_VERSION,"model_version":MODEL_VERSION,"cycle_id":cycle_id,"cycle_name":cycle_name,"generated_at":datetime.now(timezone.utc).isoformat(),"analysis_only":True,"weights_changed_by_this_cycle":False,"production_weights_active":True,"automatic_weight_changes_enabled":AUTOMATIC_WEIGHT_CHANGES_ENABLED,"promotion_controller":PROMOTION_MODE,"historical_learning_retained":True,"reconstructed_full_field_history_required":False,"native_full_field_capture_active":True,"dataset":dataset,"active_weight_set_before_cycle":current,"proposed_weights":proposed,"factor_report":factors,"weight_report":weights,"simulation_report":sim,"selection_report":selection,"promotion_gate":{"decision":"Pending Promotion Controller","promotion_authorised":False},"promotion":{"applied":False,"reason":"Candidate generation is complete. Autonomous control will pass this cycle to the Promotion Controller; /api/model/run-promotion-cycle remains available for controlled manual re-evaluation."},"safety_note":f"v2.22.2 learning generates candidates only. Promotion is handled separately by promotion_engine.py in {PROMOTION_MODE} mode; production weights change only when the Promotion Controller authorises and applies a candidate."}
       if save_result:
         execute_sql("""INSERT INTO rrt_learning_cycles(cycle_id,cycle_name,learning_version,model_version,dataset_json,factor_report_json,weight_report_json,simulation_report_json,selection_report_json,recommendations_json,cycle_json)
           VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb);""",
