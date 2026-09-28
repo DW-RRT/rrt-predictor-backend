@@ -487,7 +487,7 @@ def _sensitivity_interpretation(
 
     return "Moderate sensitivity: rankings changed but outcome improvement was not proven."
 
-def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.21.0 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
+def run_weight_simulation(test_weights: Optional[Dict[str, Any]]=None, simulation_name: str="v2.22.2 analysis-only simulation", notes: str="", min_meeting_date: Optional[str]=None, max_meeting_date: Optional[str]=None, roughie_min_price: float=7.0, roughie_min_market_rank: int=5, roughie_min_score: float=50.0, save_result: bool=True,
     simulation_group: str = "manual",
     factor_tested: Optional[str] = None,
     old_weight: Optional[float] = None,
@@ -721,10 +721,10 @@ def run_production_calibration(
     min_meeting_date: Optional[str] = None,
     max_meeting_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare the rollback baseline with the active v2.21.0 production weights."""
+    """Run the retained production-calibration comparison under v2.22.2 metadata."""
     return run_weight_simulation(
         test_weights=CURRENT_MODEL_WEIGHTS,
-        simulation_name="v2.21.0 production calibration",
+        simulation_name="v2.22.2 production calibration",
         notes="Rollback baseline versus active calibrated production weights on completed native full-field rows.",
         min_meeting_date=min_meeting_date,
         max_meeting_date=max_meeting_date,
@@ -732,7 +732,7 @@ def run_production_calibration(
         roughie_min_market_rank=5,
         roughie_min_score=50.0,
         save_result=True,
-        simulation_group="v2.21.0 production calibration",
+        simulation_group="v2.22.2 production calibration",
     )
 
 
