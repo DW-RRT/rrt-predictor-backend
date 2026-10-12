@@ -1937,7 +1937,7 @@ def get_pending_prediction_snapshots_for_results(
               ON perf.meeting_id = p.meeting_id
              AND perf.model_version = p.model_version
             WHERE perf.id IS NULL
-            ORDER BY p.meeting_date ASC NULLS LAST, p.created_at ASC
+            ORDER BY p.meeting_date DESC NULLS LAST, p.created_at DESC
             LIMIT %s;
             """,
             (limit,),
